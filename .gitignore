@@ -1,0 +1,6 @@
+build/
+.cache/
+compile_commands.json
+*.pcap
+CLAUDE.md
+docs/

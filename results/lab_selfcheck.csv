@@ -1,0 +1,17 @@
+nat_a,nat_b,ping_ok,detected_a,detected_b,match
+full,full,1,full,full,1
+full,restricted,1,full,restricted,1
+full,port-restricted,1,full,port-restricted,1
+full,symmetric,1,full,symmetric,1
+restricted,full,1,restricted,full,1
+restricted,restricted,1,restricted,restricted,1
+restricted,port-restricted,1,restricted,port-restricted,1
+restricted,symmetric,1,restricted,symmetric,1
+port-restricted,full,1,port-restricted,full,1
+port-restricted,restricted,1,port-restricted,restricted,1
+port-restricted,port-restricted,1,port-restricted,port-restricted,1
+port-restricted,symmetric,1,port-restricted,symmetric,1
+symmetric,full,1,symmetric,full,1
+symmetric,restricted,1,symmetric,restricted,1
+symmetric,port-restricted,1,symmetric,port-restricted,1
+symmetric,symmetric,1,symmetric,symmetric,1
