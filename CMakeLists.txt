@@ -33,3 +33,8 @@ add_test(NAME stun_tests COMMAND stun_tests)
 add_executable(usernat_tests tests/usernat_test.cpp)
 target_link_libraries(usernat_tests PRIVATE usernat_core GTest::gtest_main)
 add_test(NAME usernat_tests COMMAND usernat_tests)
+
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_FOUND)
+  add_test(NAME report_tests COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/lab/test_report.py)
+endif()
