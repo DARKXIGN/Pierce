@@ -19,7 +19,17 @@ find_package(GTest CONFIG REQUIRED)
 add_library(stun STATIC stun/message.cpp)
 target_include_directories(stun PUBLIC ${CMAKE_SOURCE_DIR})
 
+# Userspace NAT for the lab's symmetric-sequential type (Linux only: AF_PACKET + raw sockets).
+add_library(usernat_core STATIC lab/usernat/nat_table.cpp lab/usernat/packet.cpp)
+target_include_directories(usernat_core PUBLIC ${CMAKE_SOURCE_DIR})
+add_executable(usernat lab/usernat/main.cpp)
+target_link_libraries(usernat PRIVATE usernat_core)
+
 enable_testing()
 add_executable(stun_tests tests/stun_message_test.cpp)
 target_link_libraries(stun_tests PRIVATE stun GTest::gtest_main)
 add_test(NAME stun_tests COMMAND stun_tests)
+
+add_executable(usernat_tests tests/usernat_test.cpp)
+target_link_libraries(usernat_tests PRIVATE usernat_core GTest::gtest_main)
+add_test(NAME usernat_tests COMMAND usernat_tests)

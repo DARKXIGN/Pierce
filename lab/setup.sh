@@ -9,7 +9,10 @@
 #   port-restricted       endpoint-independent                      only remote IP:port pairs this endpoint has sent to
 #   symmetric-random      endpoint-dependent, random port           only remote IP:port pairs
 #   symmetric-sequential  endpoint-dependent, next port in sequence only remote IP:port pairs
-#                         (needs the userspace NAT in lab/usernat/; not implemented yet)
+#                         (the C++ userspace NAT in lab/usernat/; build it first with cmake)
+#
+# Environment: USERNAT_LIFETIME (mapping lifetime in s, default 120), USERNAT_STEP (port step,
+# default 1), PIERCE_BUILD (build directory holding the usernat binary, default ./build).
 set -Eeuo pipefail  # -E: the ERR trap also fires inside functions
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
@@ -21,13 +24,12 @@ TYPE_B=${2:-full}
 for t in "$TYPE_A" "$TYPE_B"; do
   [[ " ${NAT_TYPES[*]} " == *" $t "* ]] || { echo "unknown NAT type: $t (use: ${NAT_TYPES[*]})" >&2; exit 2; }
 done
-for t in "$TYPE_A" "$TYPE_B"; do
-  if [[ $t == symmetric-sequential ]]; then
-    # nftables cannot hand out ports in sequence; this type will be the C++ userspace NAT (lab/usernat/).
-    echo "NAT type 'symmetric-sequential' not implemented yet (needs lab/usernat/, roadmap stage 1)" >&2
-    exit 3
-  fi
-done
+USERNAT=${PIERCE_BUILD:-"$here/../build"}/usernat
+if [[ " $TYPE_A $TYPE_B " == *" symmetric-sequential "* && ! -x $USERNAT ]]; then
+  # nftables cannot hand out ports in sequence, so this type needs the C++ userspace NAT.
+  echo "symmetric-sequential needs $USERNAT: run cmake -B build && cmake --build build" >&2
+  exit 3
+fi
 
 if lab_exists; then
   echo "lab already up; run: sudo ./lab/teardown.sh" >&2
@@ -58,10 +60,50 @@ ns_exec "$NS_PEER_B" ip route add default via "$NAT_B_LAN_IP"
 enable_forward "$NS_NAT_A"
 enable_forward "$NS_NAT_B"
 
-# apply_nat <ns> <type> <lan_if> <wan_if> <lan_host_ip>
+# start_usernat <ns> <lan_if> <wan_if> <public_ip>
+# The kernel keeps NATing everything except UDP (so ping still works); UDP is left entirely to
+# usernat, which reads it from packet sockets and sends the rewritten packets from a raw socket.
+start_usernat() {
+  local ns=$1 lan=$2 wan=$3 pub=$4
+  ns_exec "$ns" nft -f - <<NFT
+table ip raw {
+  # No conntrack for UDP: the kernel must neither NAT it nor remember it.
+  chain prerouting { type filter hook prerouting priority -300; meta l4proto udp notrack; }
+  chain output { type filter hook output priority -300; meta l4proto udp notrack; }
+}
+table ip nat {
+  chain postrouting { type nat hook postrouting priority 100; oifname "$wan" meta l4proto != udp masquerade; }
+}
+table ip filter {
+  # usernat already got its copy of these from its packet sockets; the kernel drops the originals.
+  # (Dropping inbound UDP in "input" also stops the kernel answering with ICMP port unreachable.)
+  chain input { type filter hook input priority 0; iifname "$wan" meta l4proto udp drop; }
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+    meta l4proto udp drop
+    ct state established,related accept
+    iifname "$lan" oifname "$wan" accept
+  }
+}
+NFT
+  # Started with ip netns exec directly so teardown.sh finds it via "ip netns pids" and stops it.
+  ip netns exec "$ns" "$USERNAT" --lan "$lan" --wan "$wan" --public-ip "$pub" \
+    --lifetime "${USERNAT_LIFETIME:-120}" --step "${USERNAT_STEP:-1}" \
+    >"/tmp/pierce-usernat-$ns.log" 2>&1 &
+  local pid=$!
+  sleep 0.2
+  kill -0 "$pid" 2>/dev/null || { echo "usernat failed in $ns:" >&2; cat "/tmp/pierce-usernat-$ns.log" >&2; return 1; }
+  echo "$ns: symmetric-sequential NAT on $wan (usernat pid $pid, log /tmp/pierce-usernat-$ns.log)"
+}
+
+# apply_nat <ns> <type> <lan_if> <wan_if> <lan_host_ip> <public_ip>
 apply_nat() {
-  local ns=$1 type=$2 lan=$3 wan=$4 host=$5
+  local ns=$1 type=$2 lan=$3 wan=$4 host=$5 pub=$6
   local snat="masquerade" dnat="" inbound=""
+  if [[ $type == symmetric-sequential ]]; then
+    start_usernat "$ns" "$lan" "$wan" "$pub"
+    return
+  fi
 
   # Linux masquerade keeps the source port when it is free, so one internal ip:port gets the same
   # public port for every destination (endpoint-independent mapping). "random" picks a fresh port
@@ -111,8 +153,8 @@ NFT
   echo "$ns: $type NAT on $wan"
 }
 
-apply_nat "$NS_NAT_A" "$TYPE_A" nA-lan nA-wan "$PEER_A_IP"
-apply_nat "$NS_NAT_B" "$TYPE_B" nB-lan nB-wan "$PEER_B_IP"
+apply_nat "$NS_NAT_A" "$TYPE_A" nA-lan nA-wan "$PEER_A_IP" "$NAT_A_WAN_IP"
+apply_nat "$NS_NAT_B" "$TYPE_B" nB-lan nB-wan "$PEER_B_IP" "$NAT_B_WAN_IP"
 
 trap - ERR
 echo "lab up: natA=$TYPE_A natB=$TYPE_B"
