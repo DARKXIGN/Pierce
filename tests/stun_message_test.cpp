@@ -67,3 +67,17 @@ TEST(StunMessage, RejectsAttributeOverrunningMessage) {
   bytes[23] = 0x40;  // attribute length 64 > message length 12
   EXPECT_FALSE(stun::decode(bytes));
 }
+
+TEST(StunMessage, RoundTripChangeRequest) {
+  stun::Message m;
+  m.type = stun::kBindingRequest;
+  m.tid = stun::random_tid();
+  m.change_request = stun::kChangeIp | stun::kChangePort;
+  auto bytes = stun::encode(m);
+  EXPECT_EQ(bytes.size(), 28u);  // header + one 8-byte attribute
+  // Flags on the wire, RFC 5780 §7.2: value 0x00000006.
+  EXPECT_EQ(bytes[27], 0x06);
+  auto back = stun::decode(bytes);
+  ASSERT_TRUE(back);
+  EXPECT_EQ(back->change_request, stun::kChangeIp | stun::kChangePort);
+}

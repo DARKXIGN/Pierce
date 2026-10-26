@@ -16,8 +16,12 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 # GoogleTest comes from vcpkg, or from the distro package (apt install libgtest-dev).
 find_package(GTest CONFIG REQUIRED)
 
-add_library(stun STATIC stun/message.cpp)
+add_library(stun STATIC stun/message.cpp stun/udp.cpp stun/server.cpp stun/detector.cpp)
 target_include_directories(stun PUBLIC ${CMAKE_SOURCE_DIR})
+add_executable(stun_server stun/server_main.cpp)
+target_link_libraries(stun_server PRIVATE stun)
+add_executable(nat_detect stun/nat_detect_main.cpp)
+target_link_libraries(nat_detect PRIVATE stun)
 
 # Userspace NAT for the lab's symmetric-sequential type (Linux only: AF_PACKET + raw sockets).
 add_library(usernat_core STATIC lab/usernat/nat_table.cpp lab/usernat/packet.cpp)
@@ -26,7 +30,7 @@ add_executable(usernat lab/usernat/main.cpp)
 target_link_libraries(usernat PRIVATE usernat_core)
 
 enable_testing()
-add_executable(stun_tests tests/stun_message_test.cpp)
+add_executable(stun_tests tests/stun_message_test.cpp tests/stun_detector_test.cpp)
 target_link_libraries(stun_tests PRIVATE stun GTest::gtest_main)
 add_test(NAME stun_tests COMMAND stun_tests)
 

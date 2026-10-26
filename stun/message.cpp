@@ -47,6 +47,11 @@ std::vector<std::uint8_t> encode(const Message& m) {
                              (static_cast<std::uint32_t>(ep.ipv4[2]) << 8) | ep.ipv4[3];
     put32(body, ip ^ kMagicCookie);
   }
+  if (m.change_request != 0) {
+    put16(body, kAttrChangeRequest);
+    put16(body, 4);
+    put32(body, m.change_request);  // the flags sit in the low bits of a 32-bit value
+  }
   std::vector<std::uint8_t> out;
   put16(out, m.type);
   put16(out, static_cast<std::uint16_t>(body.size()));
@@ -80,6 +85,8 @@ std::optional<Message> decode(std::span<const std::uint8_t> b) {
       ep.ipv4 = {static_cast<std::uint8_t>(ip >> 24), static_cast<std::uint8_t>(ip >> 16),
                  static_cast<std::uint8_t>(ip >> 8), static_cast<std::uint8_t>(ip)};
       m.xor_mapped = ep;
+    } else if (attr_type == kAttrChangeRequest && attr_len == 4) {
+      m.change_request = static_cast<std::uint8_t>(get32(b, val) & (kChangeIp | kChangePort));
     }
     i = val + ((attr_len + 3) & ~std::size_t{3});  // skip value + padding to 4 bytes
   }

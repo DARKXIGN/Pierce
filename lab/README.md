@@ -19,7 +19,8 @@ sudo ./lab/check_ping.sh                        # basic reachability
 sudo ./lab/check_nat.sh full symmetric-random   # black-box NAT behavior check
 sudo ./lab/teardown.sh
 
-sudo ./lab/run_matrix.sh                        # all 5×5 combinations → results/lab_selfcheck.csv
+sudo ./lab/run_matrix.sh                        # all 5×5 combinations → results/lab_selfcheck.csv,
+                                                #   results/stage1_nat_detect.csv (ATTEMPTS=100 per combination)
 ```
 
 ## NAT types
@@ -31,7 +32,7 @@ Terms from RFC 4787: *mapping* decides which public port an internal socket gets
 | `restricted` | endpoint-independent | remote IPs this ip:port has sent to | same DNAT + dynamic set `contacted` (internal ip . port . remote ip) |
 | `port-restricted` | endpoint-independent | remote IP:port pairs this ip:port has sent to | `masquerade`, only `ct state established` |
 | `symmetric-random` | endpoint-dependent, random port per destination | remote IP:port pairs | `masquerade random`, only `ct state established` |
-| `symmetric-sequential` | endpoint-dependent, next port in sequence per destination | remote IP:port pairs | C++ userspace NAT `lab/usernat/` (see below; `setup.sh` exits with code 3 if `build/usernat` is missing, `run_matrix.sh` marks it SKIP) |
+| `symmetric-sequential` | endpoint-dependent, next port in sequence per destination | remote IP:port pairs | C++ userspace NAT `lab/usernat/` (see below; `setup.sh` exits with code 3 if `build/usernat` is missing) |
 
 Approximations to be aware of:
 - Endpoint-independent mapping relies on Linux masquerade keeping the source port when it is free. With one LAN host and no port collisions this always holds, so public port = internal port.
