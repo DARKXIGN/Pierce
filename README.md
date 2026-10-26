@@ -13,6 +13,25 @@ All tables are generated from the per-attempt CSVs in `results/` by `lab/report.
 Can the C++ detector (`nat_detect`) tell the five lab NAT types apart? One attempt = both peers run the detector at the same time; success = both sides classified as configured. NAT A is the row, NAT B the column.
 
 <!-- report:stage1:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-sequential | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+
+Detection time, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 0 / 0 | 199 / 200 | 398 / 412 | 0 / 0 | 0 / 0 |
+| restricted | 199 / 201 | 199 / 201 | 398 / 401 | 199 / 200 | 199 / 201 |
+| port-restricted | 398 / 403 | 398 / 413 | 398 / 402 | 398 / 401 | 398 / 407 |
+| symmetric-random | 0 / 0 | 199 / 203 | 398 / 403 | 0 / 0 | 0 / 0 |
+| symmetric-sequential | 0 / 0 | 199 / 203 | 398 / 401 | 0 / 0 | 0 / 0 |
 <!-- report:stage1:end -->
 
 ### Stage 2+: direct connection success rate

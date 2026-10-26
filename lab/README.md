@@ -59,4 +59,4 @@ A small Python UDP tester that proves the lab behaves as configured, independent
 3. same, from another port on the same IP — arrives → `restricted`, otherwise `port-restricted`
 
 ## Last run
-5×5 matrix: all 25 combinations passed (ping OK, both sides detected as configured), including the 9 with `symmetric-sequential` (Linux 6.18 sandbox, Ubuntu 24.04 userland). Re-run on OCI before ticking the roadmap boxes.
+5×5 matrix: all 25 combinations passed the self-check (ping OK, both sides detected as configured), including the 9 with `symmetric-sequential`, and the C++ detector classified both sides correctly in 2500/2500 attempts (100 per combination). Linux 6.18 sandbox, Ubuntu 24.04 userland; re-run on OCI before ticking the roadmap boxes.
