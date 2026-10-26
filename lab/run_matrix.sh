@@ -72,6 +72,11 @@ run_one() {
   local da db
   da=$(sed -n 's/^natA: //p' <<<"$det"); db=$(sed -n 's/^natB: //p' <<<"$det")
   echo "$a,$b,$ping,$da,$db,$match" >> "$selfcheck"
+  # Rebuild the lab so the detector starts from empty NAT state. Otherwise the kernel can hand the
+  # detector a local port the self-check just closed, whose conntrack entry (e.g. toward the
+  # server's other port) is still alive and lets a "should be filtered" reply through.
+  "$here/teardown.sh" >/dev/null 2>&1
+  "$here/setup.sh" "$a" "$b" >/dev/null 2>&1 || { printf '%-21s %-21s SETUP FAILED (detector)\n' "$a" "$b"; return; }
   local detected
   detected=$(detect_runs "$a" "$b")
   printf '%-21s %-21s ping=%s  self-check=%-8s detector=%s\n' "$a" "$b" "$ping" \
