@@ -2,18 +2,23 @@
 
 A WireGuard-based mesh VPN agent. The goal is to raise the **direct connection success rate** between two devices behind NAT, so traffic falls back to a relay less often.
 
-> Motivation: (one line here — e.g., when using my home server and OCI from a phone hotspot, connections kept falling back to a relay, so I wanted to fix it myself)
+> Why not just use Tailscale? Tailscale works well, but its NAT traversal is a black box to its users: I wanted to see *why* a connection ends up on a relay and measure how much each technique (hole punching, port prediction, birthday probing) actually helps, so I built the traversal engine myself and test it in a reproducible NAT lab.
 
-## Results (filled in after measurement)
+## Results
 
-| NAT A \ NAT B   | full cone | restricted | port-restricted | symmetric |
-| --------------- | --------- | ---------- | --------------- | --------- |
-| full cone       | —         | —          | —               | —         |
-| restricted      | —         | —          | —               | —         |
-| port-restricted | —         | —          | —               | —         |
-| symmetric       | —         | —          | —               | —         |
+Direct connection success rate per NAT combination, ≥100 attempts each, with Wilson 95% confidence intervals, plus time to connect. Generated from `results/*.csv` by `lab/report.py` — do not edit the table by hand.
 
-Baseline (stage 2) → improved (stage 3) success rate. Details in `results/`.
+<!-- report:start -->
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | — | — | — | — | — |
+| restricted | — | — | — | — | — |
+| port-restricted | — | — | — | — | — |
+| symmetric-random | — | — | — | — | — |
+| symmetric-sequential | — | — | — | — | — |
+<!-- report:end -->
+
+Baseline (stage 2) → improved (stage 3). Raw per-attempt data in `results/`.
 
 ## Build
 
@@ -28,11 +33,11 @@ On Ubuntu you can skip vcpkg for now: `sudo apt install cmake g++ libgtest-dev`,
 ## NAT lab (Linux, root)
 
 ```sh
-sudo ./lab/setup.sh full symmetric   # NAT type for A and B: full | restricted | port-restricted | symmetric
+sudo ./lab/setup.sh full symmetric-random   # NAT A, NAT B: full | restricted | port-restricted | symmetric-random | symmetric-sequential
 sudo ./lab/check_ping.sh
-sudo ./lab/check_nat.sh full symmetric
+sudo ./lab/check_nat.sh full symmetric-random
 sudo ./lab/teardown.sh
-sudo ./lab/run_matrix.sh             # all 4×4 combinations
+sudo ./lab/run_matrix.sh                    # all 5×5 combinations
 ```
 
 ## Documentation

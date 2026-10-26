@@ -3,13 +3,14 @@
 
   server: runs in the obs namespace on 203.0.113.10:3478, 203.0.113.10:3479, 203.0.113.11:3478
   client: runs in a peer namespace and classifies its NAT as
-          full | restricted | port-restricted | symmetric
+          full | restricted | port-restricted | symmetric-random | symmetric-sequential
 
 Client procedure (each run uses fresh local ports, so earlier runs do not leak into the filter state):
   1. From port P, ask 10:3478 what our public endpoint is            -> M1
   2. Ask the server to send to M1 from a different IP   (11:3478)    -> arrives? full cone
   3. Ask the server to send to M1 from a different port (10:3479)    -> arrives? restricted
-  4. From port Q, ask 10:3478 and then 11:3478                       -> ports differ? symmetric
+  4. From port Q, ask 10:3478, 11:3478, 10:3479                      -> ports differ? symmetric
+     equal, small step between the three mappings (e.g. +1, +1) -> symmetric-sequential, else -random
      (separate socket so step 4 does not open the filter for steps 2-3)
 
 This is lab scaffolding to prove the lab is correct. It is not the detector the roadmap asks for.
@@ -74,10 +75,16 @@ def classify() -> str:
     q = fresh()
     a = ask(q, (IP1, MAIN), f"MAP {(n := nonce())}", n)
     b = ask(q, (IP2, MAIN), f"MAP {(n := nonce())}", n)
-    if not a or not b:
+    c = ask(q, (IP1, ALT), f"MAP {(n := nonce())}", n)
+    if not a or not b or not c:
         return "error-no-response"
-    if a[2] != b[2]:
-        return "symmetric"
+    pa, pb, pc = int(a[2]), int(b[2]), int(c[2])
+    if not (pa == pb == pc):
+        step1, step2 = pb - pa, pc - pb
+        # A sequential allocator moves by the same small step each time; random ports almost never do.
+        if step1 == step2 and 0 < abs(step1) <= 16:
+            return "symmetric-sequential"
+        return "symmetric-random"
 
     p = fresh()
     if not ask(p, (IP1, MAIN), f"MAP {(n := nonce())}", n):

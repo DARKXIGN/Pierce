@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Usage: sudo ./lab/setup.sh <natA-type> <natB-type>
-# Types: full | restricted | port-restricted | symmetric
+# Types: full | restricted | port-restricted | symmetric-random | symmetric-sequential
 #
 # NAT behavior per RFC 4787 terms (mapping = which public port you get, filtering = who may send in):
-#   type             mapping                 inbound filtering
-#   full             endpoint-independent    none (anyone may send to the mapped port)
-#   restricted       endpoint-independent    only remote IPs this internal endpoint has sent to
-#   port-restricted  endpoint-independent    only remote IP:port pairs this endpoint has sent to
-#   symmetric        endpoint-dependent      only remote IP:port pairs (new port per destination)
+#   type                  mapping                                   inbound filtering
+#   full                  endpoint-independent                      none (anyone may send to the mapped port)
+#   restricted            endpoint-independent                      only remote IPs this internal endpoint has sent to
+#   port-restricted       endpoint-independent                      only remote IP:port pairs this endpoint has sent to
+#   symmetric-random      endpoint-dependent, random port           only remote IP:port pairs
+#   symmetric-sequential  endpoint-dependent, next port in sequence only remote IP:port pairs
+#                         (needs the userspace NAT in lab/usernat/; not implemented yet)
 set -Eeuo pipefail  # -E: the ERR trap also fires inside functions
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
@@ -18,6 +20,13 @@ TYPE_A=${1:-full}
 TYPE_B=${2:-full}
 for t in "$TYPE_A" "$TYPE_B"; do
   [[ " ${NAT_TYPES[*]} " == *" $t "* ]] || { echo "unknown NAT type: $t (use: ${NAT_TYPES[*]})" >&2; exit 2; }
+done
+for t in "$TYPE_A" "$TYPE_B"; do
+  if [[ $t == symmetric-sequential ]]; then
+    # nftables cannot hand out ports in sequence; this type will be the C++ userspace NAT (lab/usernat/).
+    echo "NAT type 'symmetric-sequential' not implemented yet (needs lab/usernat/, roadmap stage 1)" >&2
+    exit 3
+  fi
 done
 
 if lab_exists; then
@@ -56,8 +65,8 @@ apply_nat() {
 
   # Linux masquerade keeps the source port when it is free, so one internal ip:port gets the same
   # public port for every destination (endpoint-independent mapping). "random" picks a fresh port
-  # per connection, i.e. per destination: that is the symmetric NAT.
-  [[ $type == symmetric ]] && snat="masquerade random"
+  # per connection, i.e. per destination: that is the random-port symmetric NAT.
+  [[ $type == symmetric-random ]] && snat="masquerade random"
 
   # Cone types with open-ish filtering need unsolicited inbound UDP to reach the host at all, so we
   # forward every inbound UDP port to the single LAN host. Because masquerade preserved the port,
@@ -73,7 +82,7 @@ apply_nat() {
     restricted)
       # Accept a new inbound flow only if this internal ip:port has sent to that remote IP before.
       inbound="iifname \"$wan\" ip protocol udp ip daddr . udp dport . ip saddr @contacted accept" ;;
-    port-restricted|symmetric)
+    port-restricted|symmetric-random)
       # Only replies to flows we started: that is exactly conntrack's "established".
       inbound="" ;;
   esac

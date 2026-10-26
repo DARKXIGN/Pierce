@@ -29,7 +29,7 @@ NAT_B_WAN_IP=203.0.113.2
 OBS_IP1=203.0.113.10
 OBS_IP2=203.0.113.11
 
-NAT_TYPES=(full restricted port-restricted symmetric)
+NAT_TYPES=(full restricted port-restricted symmetric-random symmetric-sequential)
 
 need_root() {
   if [[ $EUID -ne 0 ]]; then
