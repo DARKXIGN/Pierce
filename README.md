@@ -53,11 +53,11 @@ Time to connect, median / p95 in ms (successful attempts only).
 
 | NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
 |---|---|---|---|---|---|
-| full | 43 / 50 | 45 / 85 | 83 / 85 | 43 / 47 | 44 / 48 |
-| restricted | 48 / 87 | 84 / 86 | 84 / 87 | 45 / 87 | 45 / 87 |
-| port-restricted | 83 / 86 | 84 / 86 | 84 / 86 | — | — |
-| symmetric-random | 43 / 47 | 46 / 86 | — | — | — |
-| symmetric-sequential | 43 / 48 | 45 / 85 | — | — | — |
+| full | 42 / 43 | 43 / 83 | 43 / 83 | 43 / 43 | 43 / 43 |
+| restricted | 43 / 83 | 43 / 83 | 43 / 83 | 43 / 83 | 43 / 83 |
+| port-restricted | 43 / 83 | 82 / 83 | 82 / 83 | — | — |
+| symmetric-random | 43 / 43 | 43 / 83 | — | — | — |
+| symmetric-sequential | 43 / 43 | 43 / 83 | — | — | — |
 <!-- report:stage2:end -->
 
 #### Asymmetric delay
@@ -65,7 +65,21 @@ Time to connect, median / p95 in ms (successful attempts only).
 Extra one-way delay on NAT A's internet link only (`tc netem`), to check that the RTT-compensated punch time keeps working when one peer is far away.
 
 <!-- report:delay:start -->
-Not measured yet: needs `tc netem` (`sudo ./lab/run_stage2.sh delay` on OCI).
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A × NAT B | delay_ms = 0 | delay_ms = 50 | delay_ms = 100 | delay_ms = 200 |
+|---|---|---|---|---|
+| full × full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted × port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random × restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A × NAT B | delay_ms = 0 | delay_ms = 50 | delay_ms = 100 | delay_ms = 200 |
+|---|---|---|---|---|
+| full × full | 43 / 43 | 468 / 468 | 893 / 893 | 1743 / 1743 |
+| port-restricted × port-restricted | 82 / 83 | 468 / 468 | 893 / 893 | 1743 / 1744 |
+| symmetric-random × restricted | 43 / 83 | 493 / 493 | 943 / 943 | 1843 / 1844 |
 <!-- report:delay:end -->
 
 #### Coordination server outage
