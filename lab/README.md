@@ -39,6 +39,7 @@ Approximations to be aware of:
 - `full`/`restricted` DNAT inbound UDP to the single LAN host on the same port. Fine for a one-host LAN, not a general NAT.
 - `symmetric-random` picks **random** ports. Many real symmetric NATs allocate sequentially, which is what `symmetric-sequential` models.
 - Mapping and `contacted` entries expire after the conntrack UDP timeout / 120 s.
+- Unsolicited UDP to a router's own WAN address is dropped in the `input` hook. Without that, Linux would deliver it locally, answer with ICMP port unreachable and confirm a conntrack entry for it. If the LAN host then sends to the same remote, masquerade sees the clash and picks another public port. An early probe from the peer would make the cone NAT endpoint-dependent. Real NATs drop such packets silently.
 
 ## Userspace NAT (`lab/usernat/`)
 nftables cannot hand out public ports in sequence, so `symmetric-sequential` is a ~250-line C++ program running in the NAT namespace:
@@ -50,6 +51,11 @@ nftables cannot hand out public ports in sequence, so `symmetric-sequential` is 
 - Mappings idle longer than `--lifetime` (default 120 s) expire; the sequence keeps going instead of reusing the freed port.
 
 `setup.sh` starts it with `USERNAT_LIFETIME` / `USERNAT_STEP` from the environment and logs to `/tmp/pierce-usernat-<ns>.log` (`-v` for per-packet lines). The mapping logic and packet rewriting live in `nat_table.cpp` / `packet.cpp` and are unit tested in `tests/usernat_test.cpp`.
+
+## Stage 2 runs
+- `run_stage2.sh baseline` brings the lab up per combination, starts `stun_server` and `pierce-coord` in `obs`, and runs both agents `ATTEMPTS` (100) times. It writes one row per attempt to `results/stage2_baseline.csv`.
+- `run_stage2.sh delay` does the same for `DELAY_PAIRS` with `tc qdisc ... netem delay` on natA's WAN link (`DELAYS`, default 0/50/100/200 ms) and writes `results/stage2_delay.csv`. It needs the `sch_netem` kernel module; the script checks first and says what to install.
+- `check_coord_outage.sh [natA] [natB]` connects two peers, kills the servers and checks 10 s of keepalives.
 
 ## Self-check (`check_nat.sh`, `natcheck.py`)
 A small Python UDP tester that proves the lab behaves as configured, independent of Pierce's own C++ STUN code (so the detector is not validated against itself). A server in `obs` listens on `.10:3478`, `.10:3479` and `.11:3478`; the client in a peer namespace:
