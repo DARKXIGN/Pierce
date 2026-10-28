@@ -1,8 +1,9 @@
 // Signaling between agents and the coordination server.
 //
 // One bidirectional stream per agent, open while a connection is being set up:
-//   agent -> Register, Candidates; answers every Ping with a Pong
-//   coord -> RelayList right after Register (the agent answers with RelayRtts)
+//   agent -> Register
+//   coord -> RelayList (possibly empty)
+//   agent -> RelayRtts, then Candidates; answers every Ping with a Pong
 //   coord -> Ping (RTT measurement), then once both peers are there:
 //            Candidates (the peer's), SessionKey, RelayGrant (if relays are configured), PunchIn
 //   agent -> RetryDirect while relayed (every 30 s); when both peers ask, the server runs the

@@ -115,7 +115,7 @@ struct Signal {
   std::optional<std::chrono::milliseconds> punch_delay;
   Clock::time_point punch_received{};
   std::vector<stun::Endpoint> relays;  // from RelayList, to measure
-  bool relays_pending = false;
+  bool relays_received = false;
   std::uint64_t punch_seq = 0;  // counts PunchIn messages, so a retry can wait for a new one
   std::optional<stun::Endpoint> relay;  // from RelayGrant
   relay::TokenBytes relay_token{};
@@ -207,7 +207,6 @@ int main(int argc, char** argv) try {
     *cands.mutable_candidates()->mutable_nat() = to_proto(my_nat);
     return cands;
   };
-  gather();
 
   // 2. Signaling.
   // Never go through an HTTP proxy from the environment (http_proxy etc.): the coordination
@@ -229,7 +228,6 @@ int main(int argc, char** argv) try {
   reg.mutable_register_()->set_node_id(id);
   reg.mutable_register_()->set_peer_id(peer);
   stream->Write(reg);
-  stream->Write(candidates_msg());
 
   // A gRPC stream takes one writer at a time: the reader thread writes Pongs, the main thread
   // RelayRtts, so both go through write().
@@ -264,7 +262,7 @@ int main(int argc, char** argv) try {
         sig.relays.clear();
         for (const auto& r : m.relay_list().relays())
           if (auto ep = from_proto(r)) sig.relays.push_back(*ep);
-        sig.relays_pending = !sig.relays.empty();
+        sig.relays_received = true;
       } else if (m.has_relay_grant() && m.relay_grant().token().size() == relay::kTokenSize) {
         sig.relay = from_proto(m.relay_grant().relay());
         std::copy(m.relay_grant().token().begin(), m.relay_grant().token().end(),
@@ -291,30 +289,12 @@ int main(int argc, char** argv) try {
   };
   std::optional<stun::Endpoint> relay_ep;
   relay::TokenBytes relay_token{};
-  // Waits for a PunchIn newer than `seen`; measures relays meanwhile if the server offered some.
+  // Waits for a PunchIn newer than `seen`.
   auto wait_plan = [&](std::uint64_t seen) -> std::optional<Plan> {
     std::unique_lock lock(sig.mu);
-    const auto deadline = Clock::now() + signal_timeout;
-    bool got = false;
-    for (;;) {
-      got = sig.cv.wait_until(lock, deadline, [&] {
-        return sig.closed || sig.relays_pending || (sig.punch_seq > seen && !sig.key.empty());
-      });
-      if (!got || !sig.relays_pending) break;
-      // While the server pairs us, measure the relays it offered so it can pick the closest one.
-      // This runs on the main socket, which is idle until the punch.
-      auto relays = sig.relays;
-      sig.relays_pending = false;
-      lock.unlock();
-      pb::AgentMsg rtts;
-      for (const auto& [i, us] : agent::measure_relays(sock, relays, std::chrono::milliseconds(300))) {
-        auto* r = rtts.mutable_relay_rtts()->add_rtts();
-        r->set_index(i);
-        r->set_rtt_us(us);
-      }
-      write(rtts);
-      lock.lock();
-    }
+    const bool got = sig.cv.wait_for(lock, signal_timeout, [&] {
+      return sig.closed || (sig.punch_seq > seen && !sig.key.empty());
+    });
     if (!got || sig.punch_seq <= seen || sig.key.empty() || sig.peer_candidates.empty())
       return std::nullopt;
     relay_ep = sig.relay;
@@ -325,6 +305,28 @@ int main(int argc, char** argv) try {
     std::lock_guard lock(sig.mu);
     return sig.punch_seq;
   };
+
+  // The order matters for port prediction: a sequential NAT often counts ports for the whole
+  // host, so every new destination of ANY socket here uses up the next public port. Measure the
+  // relays first, then the NAT (gather), then send the candidates, so that nothing new is sent
+  // between the NAT measurement and the punch.
+  std::vector<stun::Endpoint> relays;
+  {
+    std::unique_lock lock(sig.mu);
+    sig.cv.wait_for(lock, signal_timeout, [&] { return sig.closed || sig.relays_received; });
+    relays = sig.relays;
+  }
+  if (!relays.empty()) {
+    pb::AgentMsg rtts;
+    for (const auto& [i, us] : agent::measure_relays(sock, relays, std::chrono::milliseconds(300))) {
+      auto* r = rtts.mutable_relay_rtts()->add_rtts();
+      r->set_index(i);
+      r->set_rtt_us(us);
+    }
+    write(rtts);  // before the candidates: they trigger the pairing, which picks the relay
+  }
+  gather();
+  write(candidates_msg());
 
   auto plan = wait_plan(0);
   if (!plan) {

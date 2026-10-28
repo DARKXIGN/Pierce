@@ -116,9 +116,11 @@ grpc::Status Service::Session(grpc::ServerContext*,
         // A newer stream for the same node replaces the old one (e.g. the agent restarted).
         peers_[peer->id] = peer;
         db_.upsert_node(peer->id, peer->peer_id);
-        if (!opt_.relays.empty()) {
-          // Tell the agent where the relays are, so it can measure its RTT to each meanwhile.
+        {
+          // Tell the agent where the relays are (possibly none), so it can measure its RTT to
+          // each before it measures its NAT. The agent waits for this message.
           CoordMsg list;
+          list.mutable_relay_list();
           for (const auto& r : opt_.relays) *list.mutable_relay_list()->add_relays() = to_proto(r);
           peer->write(list);
         }
