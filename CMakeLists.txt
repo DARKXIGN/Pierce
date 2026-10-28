@@ -32,7 +32,8 @@ target_link_libraries(usernat PRIVATE usernat_core)
 
 # Stage 2: probes, hole punching, coordination server, agent.
 find_package(OpenSSL REQUIRED)
-add_library(agent_core STATIC agent/probe.cpp agent/candidates.cpp agent/punch.cpp)
+add_library(agent_core STATIC agent/probe.cpp agent/candidates.cpp agent/punch.cpp
+            agent/predict.cpp)
 target_include_directories(agent_core PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(agent_core PUBLIC stun OpenSSL::Crypto)
 
@@ -78,7 +79,8 @@ if(Python3_FOUND)
   add_test(NAME report_tests COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/lab/test_report.py)
 endif()
 
-add_executable(agent_tests tests/probe_test.cpp tests/punch_test.cpp)
+add_executable(agent_tests tests/probe_test.cpp tests/punch_test.cpp
+               tests/predict_test.cpp)
 target_link_libraries(agent_tests PRIVATE agent_core GTest::gtest_main)
 add_test(NAME agent_tests COMMAND agent_tests)
 

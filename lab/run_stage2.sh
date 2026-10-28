@@ -3,6 +3,10 @@
 #
 #   sudo ./lab/run_stage2.sh baseline [results_dir]   # all 5×5 combinations -> stage2_baseline.csv
 #   sudo ./lab/run_stage2.sh delay    [results_dir]   # extra delay on one side -> stage2_delay.csv
+#   sudo ./lab/run_stage2.sh stage3   [results_dir]   # with stage 3 techniques -> stage3_improved.csv
+#
+# baseline and delay run plain stage 2 hole punching. stage3 runs the same 5×5 matrix with the
+# stage 3 techniques switched on (so far: NAT mapping characterization + port prediction).
 #
 # Environment: ATTEMPTS (per combination, default 100), ONLY_A (limit NAT A types, baseline),
 #   DELAYS (delay mode, ms on natA's WAN link, default "0 50 100 200"),
@@ -44,7 +48,7 @@ stop_servers() { kill $servers 2>/dev/null; wait $servers 2>/dev/null || true; }
 attempt() {
   local prefix=$1 ra rb
   ra=$(mktemp); rb=$(mktemp)
-  local args=(--coord "$COORD" --stun "$STUN")
+  local args=(--coord "$COORD" --stun "$STUN" "${agent_extra[@]}")
   ns_exec "$NS_PEER_A" "$build/pierce-agent" "${args[@]}" --id A --peer B >"$ra" 2>/dev/null &
   local pa=$!
   ns_exec "$NS_PEER_B" "$build/pierce-agent" "${args[@]}" --id B --peer A >"$rb" 2>/dev/null
@@ -80,7 +84,15 @@ run_combo() {
   printf '%-21s %-21s %s%s/%s direct\n' "$a" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts"
 }
 
+agent_extra=()
 case $mode in
+  stage3)
+    agent_extra=(--stun-alt-ip "$OBS_IP2" --stun-alt-port 3479)
+    out=$results/stage3_improved.csv
+    echo "natA,natB,attempt,success,time_to_connect_ms,probes_sent,path" > "$out"
+    for a in ${ONLY_A:-"${NAT_TYPES[@]}"}; do
+      for b in "${NAT_TYPES[@]}"; do run_combo "$a" "$b"; done
+    done ;;
   baseline)
     out=$results/stage2_baseline.csv
     echo "natA,natB,attempt,success,time_to_connect_ms,probes_sent,path" > "$out"
@@ -103,7 +115,7 @@ case $mode in
     for pair in ${DELAY_PAIRS:-full:full port-restricted:port-restricted symmetric-random:restricted}; do
       for d in ${DELAYS:-0 50 100 200}; do run_combo "${pair%%:*}" "${pair##*:}" "$d"; done
     done ;;
-  *) echo "usage: $0 baseline|delay [results_dir]" >&2; exit 2 ;;
+  *) echo "usage: $0 baseline|delay|stage3 [results_dir]" >&2; exit 2 ;;
 esac
 "$here/teardown.sh" >/dev/null 2>&1
 echo "wrote $out"

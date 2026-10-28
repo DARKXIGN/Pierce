@@ -76,15 +76,20 @@ PunchResult Puncher::connect(const PunchOptions& opt) {
 
     if (r->probe.kind == probe::Kind::Request) {
       last_request_from_peer = Clock::now();
-      // A request from an address we do not know yet is a peer-reflexive candidate: probe it
-      // right away (a "triggered check"). That is how we reach a peer behind a symmetric NAT,
-      // whose probes come from a port it never told anyone about.
+      // A request got through to us, so the path back to its source is likely open: probe it
+      // right away (a "triggered check", RFC 8445 §7.3.1.4) instead of waiting for our round
+      // robin to come back to it, which with many candidates can take longer than the peer
+      // stays around after it has connected.
+      // A source we do not know yet is a peer-reflexive candidate. That is how we reach a peer
+      // behind a symmetric NAT, whose probes come from a port it never told anyone about.
       const bool known = std::any_of(remote_.begin(), remote_.end(),
                                      [&](const Candidate& c) { return c.ep == r->from; });
-      if (!known && !result.success) {
-        remote_.insert(remote_.begin(), {CandidateType::PeerReflexive, r->from,
-                                         priority(CandidateType::PeerReflexive)});
-        next = 0;
+      if (!result.success) {
+        if (!known) {
+          remote_.insert(remote_.begin(), {CandidateType::PeerReflexive, r->from,
+                                           priority(CandidateType::PeerReflexive)});
+          next = 0;
+        }
         send_request(r->from);
       }
     } else if (auto it = pending.find(r->probe.tid); it != pending.end() && !result.success) {

@@ -30,8 +30,23 @@ message Candidate {
   uint32 priority = 4;
 }
 
+// How the sender's NAT maps ports, measured from its main socket with three STUN requests to
+// different destinations. Lets the peer predict ports behind a sequential symmetric NAT.
+message NatInfo {
+  enum Mapping {
+    UNKNOWN = 0;
+    ENDPOINT_INDEPENDENT = 1;  // same public port for every destination (cone NATs)
+    SYMMETRIC_RANDOM = 2;
+    SYMMETRIC_SEQUENTIAL = 3;  // each new destination gets last_port + step
+  }
+  Mapping mapping = 1;
+  uint32 last_port = 2;  // public port of the last STUN request
+  int32 step = 3;
+}
+
 message Candidates {
   repeated Candidate candidates = 1;
+  NatInfo nat = 2;
 }
 
 message Ping {

@@ -14,6 +14,7 @@ enum class CandidateType {
   Host,             // an address of a local interface, e.g. 10.0.1.2:41000
   ServerReflexive,  // our public address as a STUN server saw it
   PeerReflexive,    // learned during probing: where the peer's probe actually came from
+  Predicted,        // a guess at a port behind the peer's sequential symmetric NAT (predict.hpp)
 };
 
 struct Candidate {
@@ -26,7 +27,8 @@ struct Candidate {
 std::string_view to_string(CandidateType t);
 
 // RFC 8445 §5.1.2.1 with one component: 2^24 * type preference + 2^8 * local preference + 255.
-// Type preferences: host 126, peer-reflexive 110, server-reflexive 100.
+// Type preferences: host 126, peer-reflexive 110, server-reflexive 100, predicted 50 (not in
+// RFC 8445; predictions go after every real candidate).
 std::uint32_t priority(CandidateType t, std::uint16_t local_preference = 65535);
 
 // Host candidates: every up, non-loopback IPv4 interface address, paired with `port` (the port of
