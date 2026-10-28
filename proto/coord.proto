@@ -1,0 +1,71 @@
+// Signaling between agents and the coordination server.
+//
+// One bidirectional stream per agent, open while a connection is being set up:
+//   agent -> Register, Candidates; answers every Ping with a Pong
+//   coord -> Ping (RTT measurement), then once both peers are there:
+//            Candidates (the peer's), SessionKey, PunchIn
+// The server is only needed to set a connection up. Once the peers are connected they keep
+// working without it.
+syntax = "proto3";
+
+package pierce.coord;
+
+service Coord {
+  rpc Session(stream AgentMsg) returns (stream CoordMsg);
+}
+
+message Register {
+  string node_id = 1;  // who I am
+  string peer_id = 2;  // who I want to reach
+}
+
+message Candidate {
+  enum Type {
+    HOST = 0;
+    SRFLX = 1;
+  }
+  Type type = 1;
+  bytes ipv4 = 2;  // 4 bytes, network order
+  uint32 port = 3;
+  uint32 priority = 4;
+}
+
+message Candidates {
+  repeated Candidate candidates = 1;
+}
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}
+
+// Key for the probes' HMAC. Fresh for every pairing; both peers get the same one.
+message SessionKey {
+  bytes key = 1;
+}
+
+// "Start probing in delay_ms milliseconds." Relative, so the peers need no clock sync; the
+// server picks each peer's delay so that both punches start at the same moment.
+message PunchIn {
+  uint32 delay_ms = 1;
+}
+
+message AgentMsg {
+  oneof msg {
+    Register register = 1;
+    Candidates candidates = 2;
+    Pong pong = 3;
+  }
+}
+
+message CoordMsg {
+  oneof msg {
+    Ping ping = 1;
+    Candidates peer_candidates = 2;
+    SessionKey session_key = 3;
+    PunchIn punch_in = 4;
+  }
+}

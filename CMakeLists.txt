@@ -36,6 +36,34 @@ add_library(agent_core STATIC agent/probe.cpp agent/candidates.cpp agent/punch.c
 target_include_directories(agent_core PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(agent_core PUBLIC stun OpenSSL::Crypto)
 
+# gRPC code generated from proto/coord.proto into the build directory.
+find_package(Protobuf REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+find_package(SQLite3 REQUIRED)
+find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
+set(PROTO_OUT ${CMAKE_BINARY_DIR}/gen)
+file(MAKE_DIRECTORY ${PROTO_OUT})
+set(PROTO_SRCS ${PROTO_OUT}/coord.pb.cc ${PROTO_OUT}/coord.grpc.pb.cc)
+add_custom_command(
+  OUTPUT ${PROTO_SRCS} ${PROTO_OUT}/coord.pb.h ${PROTO_OUT}/coord.grpc.pb.h
+  COMMAND ${Protobuf_PROTOC_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/proto --cpp_out=${PROTO_OUT}
+          --grpc_out=${PROTO_OUT} --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+          ${CMAKE_SOURCE_DIR}/proto/coord.proto
+  DEPENDS ${CMAKE_SOURCE_DIR}/proto/coord.proto)
+add_library(coord_proto STATIC ${PROTO_SRCS})
+target_include_directories(coord_proto PUBLIC ${PROTO_OUT})
+target_link_libraries(coord_proto PUBLIC gRPC::grpc++ protobuf::libprotobuf)
+# Generated code is not ours to fix; keep its warnings out of the build log.
+set_source_files_properties(${PROTO_SRCS} PROPERTIES COMPILE_OPTIONS "-w")
+
+add_library(coord_core STATIC coord/db.cpp coord/service.cpp)
+target_include_directories(coord_core PUBLIC ${CMAKE_SOURCE_DIR})
+target_link_libraries(coord_core PUBLIC coord_proto SQLite::SQLite3 OpenSSL::Crypto)
+add_executable(pierce-coord coord/main.cpp)
+target_link_libraries(pierce-coord PRIVATE coord_core)
+add_executable(pierce-agent agent/main.cpp)
+target_link_libraries(pierce-agent PRIVATE agent_core coord_proto)
+
 enable_testing()
 add_executable(stun_tests tests/stun_message_test.cpp tests/stun_detector_test.cpp)
 target_link_libraries(stun_tests PRIVATE stun GTest::gtest_main)
@@ -53,3 +81,7 @@ endif()
 add_executable(agent_tests tests/probe_test.cpp tests/punch_test.cpp)
 target_link_libraries(agent_tests PRIVATE agent_core GTest::gtest_main)
 add_test(NAME agent_tests COMMAND agent_tests)
+
+add_executable(coord_tests tests/coord_test.cpp)
+target_link_libraries(coord_tests PRIVATE coord_core GTest::gtest_main)
+add_test(NAME coord_tests COMMAND coord_tests)
