@@ -39,6 +39,25 @@ Detection time, median / p95 in ms (successful attempts only).
 Plain hole punching: host and server-reflexive candidates, RTT-compensated simultaneous probes, peer-reflexive candidates learned from incoming probes, 3 s cap, no relay. One attempt = both agents start at the same time; success = both received an authenticated probe response. Time to connect runs from the start of signaling to that first response (slower side). Stage 3 (port prediction, birthday probing) is measured against this table.
 
 <!-- report:stage2:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 0% [0–4] | 0% [0–4] |
+| symmetric-random | 100% [96–100] | 100% [96–100] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-sequential | 100% [96–100] | 100% [96–100] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 43 / 50 | 45 / 85 | 83 / 85 | 43 / 47 | 44 / 48 |
+| restricted | 48 / 87 | 84 / 86 | 84 / 87 | 45 / 87 | 45 / 87 |
+| port-restricted | 83 / 86 | 84 / 86 | 84 / 86 | — | — |
+| symmetric-random | 43 / 47 | 46 / 86 | — | — | — |
+| symmetric-sequential | 43 / 48 | 45 / 85 | — | — | — |
 <!-- report:stage2:end -->
 
 #### Asymmetric delay
