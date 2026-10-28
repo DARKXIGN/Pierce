@@ -133,6 +133,10 @@ Relay usage: attempts that fell back to the relay [Wilson 95% CI].
 A connection that started on the relay retries the direct path in the background. In production the retry interval is 30 s; this experiment uses 5 s so it fits in an hour. Only random symmetric vs port-restricted can upgrade at all in the lab (each retry is a fresh 64% birthday draw); the other relayed pairs never get a direct path.
 
 <!-- report:upgrade:start -->
+| NAT A × NAT B | started on relay | upgraded to direct | upgrade time, median / p95 ms |
+|---|---|---|---|
+| port-restricted × symmetric-random | 37 | 100% [91–100] | 5146 / 10245 |
+| symmetric-random × port-restricted | 29 | 100% [88–100] | 5187 / 10215 |
 <!-- report:upgrade:end -->
 
 ## Build
