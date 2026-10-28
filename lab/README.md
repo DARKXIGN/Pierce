@@ -55,7 +55,9 @@ nftables cannot hand out public ports in sequence, so `symmetric-sequential` is 
 ## Stage 2 runs
 - `run_stage2.sh baseline` brings the lab up per combination, starts `stun_server` and `pierce-coord` in `obs`, and runs both agents `ATTEMPTS` (100) times. It writes one row per attempt to `results/stage2_baseline.csv`.
 - `run_stage2.sh delay` does the same for `DELAY_PAIRS` with `tc qdisc ... netem delay` on natA's WAN link (`DELAYS`, default 0/50/100/200 ms) and writes `results/stage2_delay.csv`. It needs the `sch_netem` kernel module; the script checks first and says what to install.
-- `check_coord_outage.sh [natA] [natB]` connects two peers, kills the servers and checks 10 s of keepalives.
+- `run_stage2.sh stage3` runs the 5×5 matrix with the stage 3 techniques and two relays in `obs` (`203.0.113.10:3480`, `203.0.113.11:3480`, secret generated per run) → `results/stage3_improved.csv`, where `path` is `direct`, `relay` or `none`.
+- `run_stage2.sh upgrade` holds connections for `UPGRADE_HOLD` (16) seconds with a direct retry every `UPGRADE_RETRY_MS` (5000) for `UPGRADE_PAIRS` → `results/stage3_upgrade.csv` (`natA,natB,attempt,initial_path,upgrade_ms`).
+- `check_coord_outage.sh [natA] [natB]` connects two peers, kills the coordination and STUN servers (the relay stays up) and checks 10 s of keepalives. With `symmetric-random symmetric-random` the path is relayed.
 
 ## Self-check (`check_nat.sh`, `natcheck.py`)
 A small Python UDP tester that proves the lab behaves as configured, independent of Pierce's own C++ STUN code (so the detector is not validated against itself). A server in `obs` listens on `.10:3478`, `.10:3479` and `.11:3478`; the client in a peer namespace:

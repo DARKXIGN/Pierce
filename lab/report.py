@@ -13,6 +13,10 @@ Output: Markdown. With --readme, it replaces the text between
 `<!-- report:<section>:start -->` and `<!-- report:<section>:end -->` in that file; otherwise it is
 printed to stdout.
 
+With --upgrade the input is results/stage3_upgrade.csv (natA,natB,attempt,initial_path,upgrade_ms)
+and the output is one row per NAT pair: how many connections started on the relay, how many of
+those upgraded to a direct path [Wilson 95% CI], and median / p95 upgrade time.
+
 With --by COLUMN the table has one row per NAT pair that occurs in the data and one column per
 value of COLUMN (e.g. the extra delay), instead of the NAT A x NAT B grid.
 
@@ -133,6 +137,33 @@ def render(cells, has_time: bool, time_label: str, by: str | None = None) -> str
     return "\n".join(parts)
 
 
+def render_upgrade(paths: list[str]) -> str:
+    rows = defaultdict(lambda: [0, 0, []])  # (natA, natB) -> [relayed, upgraded, [ms]]
+    for path in paths:
+        with open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            missing = {"natA", "natB", "initial_path", "upgrade_ms"} - set(reader.fieldnames or [])
+            if missing:
+                sys.exit(f"{path}: missing column(s) {', '.join(sorted(missing))}")
+            for row in reader:
+                if row["initial_path"].strip() != "relay":
+                    continue
+                r = rows[(row["natA"], row["natB"])]
+                r[0] += 1
+                ms = row["upgrade_ms"].strip()
+                if ms:
+                    r[1] += 1
+                    r[2].append(float(ms))
+    lines = ["| NAT A × NAT B | started on relay | upgraded to direct | upgrade time, median / p95 ms |",
+             "|---|---|---|---|"]
+    order = {t: i for i, t in enumerate(NAT_TYPES)}
+    for (a, b) in sorted(rows, key=lambda p: (order.get(p[0], 99), order.get(p[1], 99))):
+        relayed, upgraded, times = rows[(a, b)]
+        lines.append(f"| {a} × {b} | {relayed} | {fmt_rate([upgraded, relayed])} | "
+                     f"{fmt_time([0, 0, times])} |")
+    return "\n".join(lines)
+
+
 def splice(readme: str, section: str, body: str) -> str:
     start, end = f"<!-- report:{section}:start -->", f"<!-- report:{section}:end -->"
     pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
@@ -149,12 +180,16 @@ def main() -> None:
     ap.add_argument("--time-col", default="time_to_connect_ms")
     ap.add_argument("--time-label", default="Time to connect")
     ap.add_argument("--by", help="pivot on this column instead of the NAT A x NAT B grid")
+    ap.add_argument("--upgrade", action="store_true", help="input is stage3_upgrade.csv")
     args = ap.parse_args()
 
-    cells, has_time = load(args.csv, args.time_col, args.by)
-    if not cells:
-        sys.exit("no rows")
-    body = render(cells, has_time, args.time_label, args.by)
+    if args.upgrade:
+        body = render_upgrade(args.csv)
+    else:
+        cells, has_time = load(args.csv, args.time_col, args.by)
+        if not cells:
+            sys.exit("no rows")
+        body = render(cells, has_time, args.time_label, args.by)
     if args.readme:
         with open(args.readme) as f:
             text = f.read()

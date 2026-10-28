@@ -70,6 +70,16 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("| symmetric-random | — | — | — | 100% [72–100] | — |",
                       body.split("Relay usage")[1])
 
+    def test_upgrade_table(self):
+        rows = ["natA,natB,attempt,initial_path,upgrade_ms"]
+        rows += ["symmetric-random,port-restricted,1,direct,",
+                 "symmetric-random,port-restricted,2,relay,5100",
+                 "symmetric-random,port-restricted,3,relay,10200",
+                 "symmetric-random,port-restricted,4,relay,"]
+        body = report.render_upgrade([self.write("\n".join(rows) + "\n")])
+        # 3 started on the relay, 2 upgraded; median of [5100, 10200] by nearest rank is 5100.
+        self.assertIn("| symmetric-random × port-restricted | 3 | 67% [21–94] | 5100 / 10200 |", body)
+
     def test_pivot_by_column(self):
         rows = ["natA,natB,delay_ms,attempt,success,time_to_connect_ms,probes_sent,path"]
         for d in ("200", "0", "50"):

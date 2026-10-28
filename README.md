@@ -86,6 +86,26 @@ Time to connect, median / p95 in ms (successful attempts only).
 
 `sudo ./lab/check_coord_outage.sh` connects two peers, kills the coordination and STUN servers, then requires 10 s of keepalives (every 500 ms) to keep getting answered on both sides.
 
+### Stage 3: port prediction, birthday probing, relay
+
+Same 5×5 matrix with the stage 3 techniques on. Success is still the **direct** rate; attempts that fail it fall back to a relay after 3 s (relay usage table below).
+
+- **NAT characterization**: three STUN requests from the agent's one socket (primary, other IP, other port) tell endpoint-independent, sequential symmetric (+ step) and random symmetric mappings apart.
+- **Port prediction** (peer behind `symmetric-sequential`): probe the next ports the peer's NAT will hand out. When both sides are sequential, each side's k-th prediction is offset so it leaves from exactly the mapping the other side's k-th prediction targets.
+- **Birthday probing** (`symmetric-random` vs a cone NAT): the random side probes from 256 extra sockets, the cone side guesses 256 ports on the peer's IP; expected hit rate 1 − e^(−256·256/64512) ≈ 64%.
+- **Relay**: after 3 s the agents bind to the relay the coordination server picked (lowest RTT_A + RTT_B) with a shared token and probe through it.
+- **Triggered checks** on every incoming request (also a change to the stage 2 code path).
+
+<!-- report:stage3:start -->
+<!-- report:stage3:end -->
+
+#### Relay → direct upgrade
+
+A connection that started on the relay retries the direct path in the background. In production the retry interval is 30 s; this experiment uses 5 s so it fits in an hour. Only random symmetric vs port-restricted can upgrade at all in the lab (each retry is a fresh 64% birthday draw); the other relayed pairs never get a direct path.
+
+<!-- report:upgrade:start -->
+<!-- report:upgrade:end -->
+
 ## Build
 
 ```sh
@@ -117,6 +137,12 @@ sudo ./lab/run_stage2.sh delay              # one-sided extra delay -> results/s
 sudo ./lab/check_coord_outage.sh            # peers keep working after the coordination server dies
 python3 lab/report.py results/stage2_baseline.csv --section stage2 --readme README.md
 python3 lab/report.py results/stage2_delay.csv --section delay --by delay_ms --readme README.md
+
+sudo ./lab/run_stage2.sh stage3             # stage 3 techniques + relay -> results/stage3_improved.csv
+sudo ./lab/run_stage2.sh upgrade            # relay -> direct upgrades -> results/stage3_upgrade.csv
+sudo ./lab/check_coord_outage.sh symmetric-random symmetric-random   # relayed path survives too
+python3 lab/report.py results/stage3_improved.csv --section stage3 --readme README.md
+python3 lab/report.py results/stage3_upgrade.csv --upgrade --section upgrade --readme README.md
 ```
 
 ## STUN and NAT type detection
@@ -142,7 +168,16 @@ build/pierce-agent --coord 203.0.113.10:50051 --stun 203.0.113.10:3478 --id A --
 2. Candidates: every local IPv4 address (host) plus the STUN-reported public address (server-reflexive), with RFC 8445 priorities.
 3. Signaling (`proto/coord.proto`, one bidirectional gRPC stream per agent): Register, Candidates. Once both peers are there, the server pings each over its stream, then sends the peer's candidates, a fresh 32-byte session key and `PunchIn{delay_ms}` with `delay_i = X − RTT_i/2`, `X = max(RTT_A, RTT_B)/2 + 20 ms`, so both peers start at the same moment without synchronized clocks.
 4. Probing: one request every 20 ms, round robin over the peer's candidates. Every probe carries an 8-byte HMAC-SHA256 with the session key; anything else is dropped, and probes only ever go to IPs from signaling. A valid request from an unknown port of a known IP becomes a peer-reflexive candidate and is probed right away. That is how a peer behind a symmetric NAT gets reached.
-5. Success: an authenticated response to one of our requests. Give up after 3 s (stage 3 then falls back to a relay).
+5. Success: an authenticated response to one of our requests. Give up after 3 s and fall back to the relay (stage 3).
+
+## Relay (stage 3)
+
+```sh
+build/pierce-relay --listen 203.0.113.10:3480 --secret <hex>
+build/pierce-coord --listen 203.0.113.10:50051 --relay 203.0.113.10:3480 --relay 203.0.113.11:3480 --relay-secret <hex>
+```
+
+The relay forwards packets between the two endpoints that bound with the same token. A token is `session id | expiry | HMAC(secret)`, issued by the coordination server and checked by the relay alone, so a relayed connection keeps working while the coordination server is down until the token expires (600 s by default). Relay control packets start with `0xFE` (BIND, BOUND, PING, PONG); everything else is forwarded unchanged, so the relay only ever sees WireGuard ciphertext and probes.
 
 ## Documentation
 
