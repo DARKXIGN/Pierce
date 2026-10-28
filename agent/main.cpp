@@ -2,12 +2,15 @@
 //
 //   pierce-agent --coord 203.0.113.10:50051 --stun 203.0.113.10:3478 --id A --peer B
 //                [--stun-alt-ip 203.0.113.11] [--stun-alt-port 3479] [--predict-window 32]
+//                [--birthday 256]
 //                [--timeout-ms 3000] [--signal-timeout-ms 5000] [--interval-ms 20]
 //                [--hold SEC] [--keepalive-ms 25000]
 //
 // With --stun-alt-ip, the agent also asks the STUN server's other IP and other port for its public
 // port, from the same socket, to learn how its NAT maps ports (predict.hpp). If the peer's NAT
 // turns out to be sequential, the agent adds up to --predict-window predicted ports to probe.
+// If one side's NAT maps randomly and the other's is a cone, they do birthday probing: the random
+// side probes from --birthday extra sockets, the cone side guesses as many ports (0 = off).
 //
 // Prints one line to stdout:  success,time_to_connect_ms,probes_sent,path,remote
 //   e.g. 1,142,7,direct,203.0.113.2:41000      or      0,,150,none,
@@ -43,7 +46,7 @@ namespace pb = pierce::coord;
 [[noreturn]] void usage() {
   std::fputs(
       "usage: pierce-agent --coord HOST:PORT --stun IP:PORT --id ID --peer ID [--stun-alt-ip IP]\n"
-      "                    [--stun-alt-port N] [--predict-window N] [--timeout-ms N]\n"
+      "                    [--stun-alt-port N] [--predict-window N] [--birthday N] [--timeout-ms N]\n"
       "                    [--signal-timeout-ms N] [--interval-ms N] [--hold SEC] [--keepalive-ms N]\n",
       stderr);
   std::exit(2);
@@ -114,6 +117,7 @@ int main(int argc, char** argv) try {
   std::optional<std::array<std::uint8_t, 4>> stun_alt_ip;
   std::uint16_t stun_alt_port = 3479;
   int predict_window = 32;
+  int birthday = 256;
   agent::PunchOptions popt;
   auto signal_timeout = std::chrono::milliseconds(5000);
   int hold_s = 0;
@@ -130,6 +134,7 @@ int main(int argc, char** argv) try {
     else if (a == "--stun-alt-ip") { stun_alt_ip = stun::parse_ipv4(value()); if (!stun_alt_ip) usage(); }
     else if (a == "--stun-alt-port") stun_alt_port = static_cast<std::uint16_t>(std::atoi(value().c_str()));
     else if (a == "--predict-window") predict_window = std::atoi(value().c_str());
+    else if (a == "--birthday") birthday = std::clamp(std::atoi(value().c_str()), 0, 256);
     else if (a == "--id") id = value();
     else if (a == "--peer") peer = value();
     else if (a == "--timeout-ms") popt.timeout = ms();
@@ -249,20 +254,37 @@ int main(int argc, char** argv) try {
     punch_at = sig.punch_received + *sig.punch_delay;
   }
 
-  // Peer behind a sequential NAT: add predicted ports on its public IP (from its srflx candidate).
+  // Stage 3 techniques, chosen from both sides' NAT mapping. They need the peer's public IP (its
+  // srflx candidate); predictions and guesses never go to any other address.
+  using agent::Mapping;
   auto peer_srflx = std::find_if(peer_cands.begin(), peer_cands.end(), [](const Candidate& c) {
     return c.type == CandidateType::ServerReflexive;
   });
+  std::vector<stun::UdpSocket> birthday_socks;
+  std::optional<stun::Endpoint> birthday_target;
   if (peer_srflx != peer_cands.end()) {
-    const bool we_seq = my_nat.mapping == agent::Mapping::SymmetricSequential;
-    auto predicted = agent::predicted_candidates(peer_srflx->ep.ipv4, peer_nat, we_seq,
-                                                 mine.size(), predict_window);
+    const auto peer_ip = peer_srflx->ep.ipv4;
+    // Peer behind a sequential NAT: probe the ports it will use next.
+    const bool we_seq = my_nat.mapping == Mapping::SymmetricSequential;
+    auto predicted =
+        agent::predicted_candidates(peer_ip, peer_nat, we_seq, mine.size(), predict_window);
     peer_cands.insert(peer_cands.end(), predicted.begin(), predicted.end());
+    // Random mapping on one side, cone on the other: birthday probing.
+    if (my_nat.mapping == Mapping::EndpointIndependent &&
+        peer_nat.mapping == Mapping::SymmetricRandom) {
+      auto guesses = agent::guessed_candidates(peer_ip, birthday);
+      peer_cands.insert(peer_cands.end(), guesses.begin(), guesses.end());
+    } else if (my_nat.mapping == Mapping::SymmetricRandom &&
+               peer_nat.mapping == Mapping::EndpointIndependent && birthday > 0) {
+      for (int i = 0; i < birthday; ++i) birthday_socks.emplace_back();
+      birthday_target = peer_srflx->ep;
+    }
   }
 
   // 3. Punch: wait for the agreed moment, then probe.
   std::this_thread::sleep_until(punch_at);
   agent::Puncher puncher(sock, key, peer_cands);
+  if (birthday_target) puncher.add_birthday_sockets(birthday_socks, *birthday_target);
   const auto res = puncher.connect(popt);
   if (!res.success) {
     stop_signaling();
@@ -277,7 +299,8 @@ int main(int argc, char** argv) try {
   // 4. Optionally stay connected. Keepalives are peer to peer: the coordination server may die.
   if (hold_s > 0) {
     std::fputs("connected\n", stderr);
-    const auto stats = puncher.hold(*res.path, std::chrono::seconds(hold_s), keepalive);
+    const auto stats =
+        puncher.hold(res.local, *res.path, std::chrono::seconds(hold_s), keepalive);
     std::fprintf(stderr, "keepalive sent=%d answered=%d\n", stats.sent, stats.answered);
   }
   stop_signaling();

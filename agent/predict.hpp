@@ -42,4 +42,10 @@ std::vector<Candidate> predicted_candidates(const std::array<std::uint8_t, 4>& p
                                             const NatInfo& peer, bool we_are_sequential,
                                             std::size_t our_candidate_count, int window);
 
+// Birthday probing, easy side: `count` (at most 256) distinct random ports in 1024-65535 on the
+// peer's public IP, for a peer behind a NAT that picks a random public port per destination.
+// The peer opens as many sockets toward us; with 256 guesses against 256 sockets in a space of
+// 64512 ports, the chance that at least one guess hits is 1 - e^(-256*256/64512), about 64%.
+std::vector<Candidate> guessed_candidates(const std::array<std::uint8_t, 4>& peer_ip, int count);
+
 }  // namespace agent

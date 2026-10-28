@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <future>
 
 #include "agent/candidates.hpp"
@@ -99,10 +100,52 @@ TEST(Puncher, HoldKeepsAnswering) {
   agent::Puncher a(sa, kKey, {host(sb.local_endpoint())});
   agent::Puncher b(sb, kKey, {host(sa.local_endpoint())});
   const auto d = std::chrono::milliseconds(300), i = std::chrono::milliseconds(50);
-  auto fb = std::async(std::launch::async, [&] { return b.hold(sa.local_endpoint(), d, i); });
-  const auto ha = a.hold(sb.local_endpoint(), d, i);
+  auto fb = std::async(std::launch::async, [&] { return b.hold(0, sa.local_endpoint(), d, i); });
+  const auto ha = a.hold(0, sb.local_endpoint(), d, i);
   const auto hb = fb.get();
   EXPECT_GE(ha.sent, 5);
   EXPECT_GE(ha.answered, ha.sent - 1);  // the last request may still be in flight at the end
   EXPECT_GE(hb.answered, hb.sent - 1);
+}
+
+// Birthday probing on loopback: B only knows a wrong port for A, A probes from 8 extra sockets.
+// One of them is the "lucky" one B guesses; the connection must use it.
+TEST(Puncher, BirthdaySocketThatMatchesWins) {
+  stun::UdpSocket sa(Endpoint{{127, 0, 0, 1}, 0}), sb(Endpoint{{127, 0, 0, 1}, 0});
+  std::vector<stun::UdpSocket> extra;
+  for (int i = 0; i < 8; ++i) extra.emplace_back(Endpoint{{127, 0, 0, 1}, 0});
+  const auto lucky = extra[5].local_endpoint();
+  stun::UdpSocket unused(Endpoint{{127, 0, 0, 1}, 0});
+
+  agent::Puncher a(sa, kKey, {host(sb.local_endpoint())});
+  a.add_birthday_sockets(extra, sb.local_endpoint());
+  // B's candidates for A: a dead port (A's main socket "unknown") and the guessed lucky port.
+  agent::Puncher b(sb, kKey, {host(unused.local_endpoint()),
+                              {CandidateType::Predicted, lucky,
+                               agent::priority(CandidateType::Predicted)}});
+  agent::PunchOptions opt;
+  opt.timeout = std::chrono::milliseconds(1000);
+  auto fb = std::async(std::launch::async, [&] { return b.connect(opt); });
+  const auto ra = a.connect(opt);
+  const auto rb = fb.get();
+  ASSERT_TRUE(ra.success);
+  ASSERT_TRUE(rb.success);
+  // On loopback nothing filters, so A may connect from any socket; B must have reached A at a
+  // port A actually owns.
+  EXPECT_TRUE(rb.path == sa.local_endpoint() || rb.path == lucky ||
+              std::any_of(extra.begin(), extra.end(),
+                          [&](auto& s) { return s.local_endpoint() == *rb.path; }));
+}
+
+TEST(Puncher, IntervalShrinksWithManyPairs) {
+  stun::UdpSocket sa(Endpoint{{127, 0, 0, 1}, 0});
+  std::vector<agent::Candidate> many;
+  for (std::uint16_t p = 1; p <= 100; ++p)
+    many.push_back(host(Endpoint{{127, 0, 0, 1}, static_cast<std::uint16_t>(40000 + p)}));
+  agent::Puncher a(sa, kKey, many);
+  agent::PunchOptions opt;
+  opt.timeout = std::chrono::milliseconds(500);
+  a.connect(opt);
+  // 100 pairs, pass 500 ms -> 5 ms per probe -> about 100 probes in 500 ms (20 ms would give 25).
+  EXPECT_GT(a.probes_sent(), 60);
 }

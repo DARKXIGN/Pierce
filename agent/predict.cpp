@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <random>
+#include <set>
 
 namespace agent {
 
@@ -37,6 +39,21 @@ std::vector<Candidate> predicted_candidates(const std::array<std::uint8_t, 4>& p
     const auto pri = priority(CandidateType::Predicted, static_cast<std::uint16_t>(65535 - k));
     out.push_back({CandidateType::Predicted, {peer_ip, static_cast<std::uint16_t>(port)}, pri});
   }
+  return out;
+}
+
+std::vector<Candidate> guessed_candidates(const std::array<std::uint8_t, 4>& peer_ip, int count) {
+  count = std::clamp(count, 0, 256);
+  // Not security relevant (the ports are no secret), so a plain PRNG is fine.
+  static thread_local std::mt19937 rng{std::random_device{}()};
+  std::uniform_int_distribution<int> port(1024, 65535);
+  std::set<int> picked;
+  while (static_cast<int>(picked.size()) < count) picked.insert(port(rng));
+  std::vector<Candidate> out;
+  std::uint16_t local_pref = 0;  // below every prediction: guesses come last
+  for (int p : picked)
+    out.push_back({CandidateType::Predicted, {peer_ip, static_cast<std::uint16_t>(p)},
+                   priority(CandidateType::Predicted, local_pref++)});
   return out;
 }
 

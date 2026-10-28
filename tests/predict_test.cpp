@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <set>
+
 #include "agent/predict.hpp"
 
 using agent::Mapping;
@@ -56,4 +58,20 @@ TEST(Predict, WindowCappedAndPortsInRange) {
   EXPECT_EQ(c.size(), 5u);  // 65531..65535, the rest would overflow
   agent::NatInfo low{Mapping::SymmetricSequential, 100, 1};
   EXPECT_EQ(agent::predicted_candidates({1, 1, 1, 1}, low, false, 2, 1000).size(), 256u);
+}
+
+TEST(Guess, DistinctPortsOnPeerIpCapped) {
+  auto c = agent::guessed_candidates({198, 51, 100, 9}, 1000);
+  ASSERT_EQ(c.size(), 256u);
+  std::set<std::uint16_t> ports;
+  for (const auto& g : c) {
+    EXPECT_EQ(g.ep.ipv4, (std::array<std::uint8_t, 4>{198, 51, 100, 9}));
+    EXPECT_GE(g.ep.port, 1024);
+    ports.insert(g.ep.port);
+  }
+  EXPECT_EQ(ports.size(), 256u);
+  // Guesses rank below predictions.
+  agent::NatInfo seq{Mapping::SymmetricSequential, 20000, 1};
+  auto pred = agent::predicted_candidates({1, 1, 1, 1}, seq, false, 2, 256);
+  for (const auto& g : c) EXPECT_LT(g.priority, pred.back().priority);
 }

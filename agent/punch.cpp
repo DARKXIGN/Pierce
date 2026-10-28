@@ -1,13 +1,20 @@
 #include "agent/punch.hpp"
 
+#include <poll.h>
+
 #include <algorithm>
 #include <map>
 
 namespace agent {
 
-Puncher::Puncher(stun::UdpSocket& sock, probe::Key key, std::vector<Candidate> remote)
-    : sock_(sock), key_(std::move(key)), remote_(std::move(remote)) {
+Puncher::Puncher(stun::UdpSocket& main, probe::Key key, std::vector<Candidate> remote)
+    : socks_{&main}, key_(std::move(key)), remote_(std::move(remote)) {
   sort_and_dedupe(remote_);
+}
+
+void Puncher::add_birthday_sockets(std::vector<stun::UdpSocket>& extra, const Endpoint& target) {
+  birthday_target_ = target;
+  for (auto& s : extra) socks_.push_back(&s);
 }
 
 bool Puncher::allowed(const Endpoint& from) const {
@@ -17,10 +24,11 @@ bool Puncher::allowed(const Endpoint& from) const {
                      [&](const Candidate& c) { return c.ep.ipv4 == from.ipv4; });
 }
 
-void Puncher::send(probe::Kind kind, const probe::TransactionId& tid, const Endpoint& to) {
+void Puncher::send(std::size_t local, probe::Kind kind, const probe::TransactionId& tid,
+                   const Endpoint& to) {
   const auto bytes = probe::encode({kind, tid}, key_);
   try {
-    sock_.send_to(bytes, to);
+    socks_[local]->send_to(bytes, to);
   } catch (const std::system_error&) {
     // e.g. "network unreachable" for a host candidate on another LAN; that pair just fails.
   }
@@ -28,14 +36,21 @@ void Puncher::send(probe::Kind kind, const probe::TransactionId& tid, const Endp
 }
 
 std::optional<Puncher::Received> Puncher::receive_until(Clock::time_point until) {
+  std::vector<pollfd> fds;
+  for (auto* s : socks_) fds.push_back({s->fd(), POLLIN, 0});
   for (auto now = Clock::now(); now < until; now = Clock::now()) {
-    auto d = sock_.receive(std::chrono::ceil<std::chrono::milliseconds>(until - now));
-    if (!d) return std::nullopt;
-    if (!probe::looks_like_probe(d->bytes) || !allowed(d->from)) continue;
-    auto p = probe::decode(d->bytes, key_);
-    if (!p) continue;  // wrong key or forged: drop silently
-    if (p->kind == probe::Kind::Request) send(probe::Kind::Response, p->tid, d->from);
-    return Received{*p, d->from};
+    const auto wait = std::chrono::ceil<std::chrono::milliseconds>(until - now);
+    for (auto& f : fds) f.revents = 0;
+    if (poll(fds.data(), fds.size(), static_cast<int>(wait.count())) <= 0) return std::nullopt;
+    for (std::size_t i = 0; i < fds.size(); ++i) {
+      if (!(fds[i].revents & POLLIN)) continue;
+      auto d = socks_[i]->receive(std::chrono::milliseconds(0));
+      if (!d || !probe::looks_like_probe(d->bytes) || !allowed(d->from)) continue;
+      auto p = probe::decode(d->bytes, key_);
+      if (!p) continue;  // wrong key or forged: drop silently
+      if (p->kind == probe::Kind::Request) send(i, probe::Kind::Response, p->tid, d->from);
+      return Received{*p, d->from, i};
+    }
   }
   return std::nullopt;
 }
@@ -44,15 +59,27 @@ PunchResult Puncher::connect(const PunchOptions& opt) {
   PunchResult result;
   const auto start = Clock::now();
   const auto deadline = start + opt.timeout;
-  std::map<probe::TransactionId, Endpoint> pending;  // our requests, by transaction ID
+  struct Sent {
+    std::size_t local;
+    Endpoint to;
+  };
+  std::map<probe::TransactionId, Sent> pending;  // our requests, by transaction ID
   std::size_t next = 0;
   auto next_send = start;
   auto last_request_from_peer = start;
 
-  auto send_request = [&](const Endpoint& to) {
+  auto send_request = [&](std::size_t local, const Endpoint& to) {
     const auto tid = probe::random_tid();
-    pending[tid] = to;
-    send(probe::Kind::Request, tid, to);
+    pending[tid] = {local, to};
+    send(local, probe::Kind::Request, tid, to);
+  };
+  // The round robin runs over the main socket's candidates, then over the birthday sockets
+  // (each of which only ever probes the birthday target).
+  auto pairs = [&] { return remote_.size() + (socks_.size() - 1); };
+  auto interval = [&] {
+    const auto per_pair = opt.pass / std::max<std::size_t>(pairs(), 1);
+    return std::clamp(std::chrono::duration_cast<std::chrono::milliseconds>(per_pair),
+                      std::chrono::milliseconds(1), opt.interval);
   };
 
   for (;;) {
@@ -63,10 +90,11 @@ PunchResult Puncher::connect(const PunchOptions& opt) {
       if (now - quiet_since >= opt.linger) break;
     } else if (now >= deadline) {
       break;
-    } else if (now >= next_send && !remote_.empty()) {
-      // Round robin over the candidates, highest priority first.
-      send_request(remote_[next++ % remote_.size()].ep);
-      next_send = now + opt.interval;
+    } else if (now >= next_send && pairs() > 0) {
+      const std::size_t i = next++ % pairs();
+      if (i < remote_.size()) send_request(0, remote_[i].ep);
+      else send_request(i - remote_.size() + 1, birthday_target_);
+      next_send = now + interval();
     }
 
     const auto wait_until = result.success ? now + opt.linger
@@ -90,19 +118,20 @@ PunchResult Puncher::connect(const PunchOptions& opt) {
                                            priority(CandidateType::PeerReflexive)});
           next = 0;
         }
-        send_request(r->from);
+        send_request(r->local, r->from);
       }
     } else if (auto it = pending.find(r->probe.tid); it != pending.end() && !result.success) {
       result.success = true;
       result.connected_at = Clock::now();
-      result.path = it->second;
+      result.path = it->second.to;
+      result.local = it->second.local;
     }
   }
   return result;
 }
 
-HoldStats Puncher::hold(const Endpoint& path, std::chrono::milliseconds duration,
-                        std::chrono::milliseconds interval) {
+HoldStats Puncher::hold(std::size_t local, const Endpoint& path,
+                        std::chrono::milliseconds duration, std::chrono::milliseconds interval) {
   HoldStats stats;
   const auto end = Clock::now() + duration;
   probe::TransactionId outstanding{};
@@ -111,7 +140,7 @@ HoldStats Puncher::hold(const Endpoint& path, std::chrono::milliseconds duration
     if (Clock::now() >= next_send) {
       outstanding = probe::random_tid();
       waiting = true;
-      send(probe::Kind::Request, outstanding, path);
+      send(local, probe::Kind::Request, outstanding, path);
       ++stats.sent;
       next_send += interval;
     }
