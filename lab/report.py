@@ -6,7 +6,8 @@
 
 Input: one row per attempt with at least `natA,natB,success` (success is 0/1). If the time column
 (default `time_to_connect_ms`, see --time-col) exists, a second table with median / p95 of the
-successful attempts is added. Several CSVs may be given; their rows are pooled.
+successful attempts is added. If a `path` column contains "relay", a third table gives the share
+of attempts that ended on the relay. Several CSVs may be given; their rows are pooled.
 
 Output: Markdown. With --readme, it replaces the text between
 `<!-- report:<section>:start -->` and `<!-- report:<section>:end -->` in that file; otherwise it is
@@ -47,9 +48,9 @@ def percentile(sorted_values: list[float], q: float) -> float:
 
 
 def load(paths: list[str], time_col: str, by: str | None = None):
-    """Returns {key: (successes, attempts, [times of successful attempts])}, has_time.
+    """Returns {key: [successes, attempts, [times of successful attempts], relayed]}, has_time.
     key is (natA, natB), or (natA, natB, value of `by`) when `by` is given."""
-    cells = defaultdict(lambda: [0, 0, []])
+    cells = defaultdict(lambda: [0, 0, [], 0])
     has_time = False
     for path in paths:
         with open(path, newline="") as f:
@@ -64,6 +65,8 @@ def load(paths: list[str], time_col: str, by: str | None = None):
                 key = (row["natA"], row["natB"]) + ((row[by],) if by else ())
                 cell = cells[key]
                 cell[1] += 1
+                if (row.get("path") or "").strip() == "relay":
+                    cell[3] += 1
                 if row["success"].strip() == "1":
                     cell[0] += 1
                     t = (row.get(time_col) or "").strip()
@@ -100,9 +103,13 @@ def pivot_table(cells, by: str, fmt) -> str:
 
 
 def fmt_rate(cell) -> str:
-    k, n, _ = cell
+    k, n = cell[0], cell[1]
     lo, hi = wilson(k, n)
     return f"{round(100 * k / n)}% [{round(100 * lo)}–{round(100 * hi)}]"
+
+
+def fmt_relay(cell) -> str:
+    return fmt_rate([cell[3], cell[1]])
 
 
 def fmt_time(cell) -> str:
@@ -120,6 +127,9 @@ def render(cells, has_time: bool, time_label: str, by: str | None = None) -> str
     if has_time:
         parts += ["", f"{time_label}, median / p95 in ms (successful attempts only).", "",
                   grid(fmt_time)]
+    if any(c[3] for c in cells.values()):
+        parts += ["", "Relay usage: attempts that fell back to the relay [Wilson 95% CI].", "",
+                  grid(fmt_relay)]
     return "\n".join(parts)
 
 

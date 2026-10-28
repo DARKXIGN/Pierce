@@ -33,9 +33,16 @@ target_link_libraries(usernat PRIVATE usernat_core)
 # Stage 2: probes, hole punching, coordination server, agent.
 find_package(OpenSSL REQUIRED)
 add_library(agent_core STATIC agent/probe.cpp agent/candidates.cpp agent/punch.cpp
-            agent/predict.cpp)
+            agent/predict.cpp agent/relay_client.cpp)
 target_include_directories(agent_core PUBLIC ${CMAKE_SOURCE_DIR})
-target_link_libraries(agent_core PUBLIC stun OpenSSL::Crypto)
+target_link_libraries(agent_core PUBLIC stun relay_core OpenSSL::Crypto)
+
+# Stage 3: relay.
+add_library(relay_core STATIC relay/protocol.cpp relay/table.cpp)
+target_include_directories(relay_core PUBLIC ${CMAKE_SOURCE_DIR})
+target_link_libraries(relay_core PUBLIC stun OpenSSL::Crypto)
+add_executable(pierce-relay relay/main.cpp)
+target_link_libraries(pierce-relay PRIVATE relay_core)
 
 # gRPC code generated from proto/coord.proto into the build directory.
 find_package(Protobuf REQUIRED)
@@ -59,7 +66,7 @@ set_source_files_properties(${PROTO_SRCS} PROPERTIES COMPILE_OPTIONS "-w")
 
 add_library(coord_core STATIC coord/db.cpp coord/service.cpp)
 target_include_directories(coord_core PUBLIC ${CMAKE_SOURCE_DIR})
-target_link_libraries(coord_core PUBLIC coord_proto SQLite::SQLite3 OpenSSL::Crypto)
+target_link_libraries(coord_core PUBLIC coord_proto relay_core SQLite::SQLite3 OpenSSL::Crypto)
 add_executable(pierce-coord coord/main.cpp)
 target_link_libraries(pierce-coord PRIVATE coord_core)
 add_executable(pierce-agent agent/main.cpp)
@@ -87,3 +94,7 @@ add_test(NAME agent_tests COMMAND agent_tests)
 add_executable(coord_tests tests/coord_test.cpp)
 target_link_libraries(coord_tests PRIVATE coord_core GTest::gtest_main)
 add_test(NAME coord_tests COMMAND coord_tests)
+
+add_executable(relay_tests tests/relay_test.cpp)
+target_link_libraries(relay_tests PRIVATE relay_core GTest::gtest_main)
+add_test(NAME relay_tests COMMAND relay_tests)

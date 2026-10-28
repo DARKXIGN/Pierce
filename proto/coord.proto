@@ -2,8 +2,11 @@
 //
 // One bidirectional stream per agent, open while a connection is being set up:
 //   agent -> Register, Candidates; answers every Ping with a Pong
+//   coord -> RelayList right after Register (the agent answers with RelayRtts)
 //   coord -> Ping (RTT measurement), then once both peers are there:
-//            Candidates (the peer's), SessionKey, PunchIn
+//            Candidates (the peer's), SessionKey, RelayGrant (if relays are configured), PunchIn
+//   agent -> RetryDirect while relayed (every 30 s); when both peers ask, the server runs the
+//            pairing again (fresh RTTs, PunchIn) so they can try to upgrade to a direct path.
 // The server is only needed to set a connection up. Once the peers are connected they keep
 // working without it.
 syntax = "proto3";
@@ -68,11 +71,42 @@ message PunchIn {
   uint32 delay_ms = 1;
 }
 
+message Relay {
+  bytes ipv4 = 1;  // 4 bytes, network order
+  uint32 port = 2;
+}
+
+message RelayList {
+  repeated Relay relays = 1;
+}
+
+// The agent's RTT to each relay in RelayList, by index. Relays that did not answer are left out.
+message RelayRtts {
+  message Rtt {
+    uint32 index = 1;
+    uint32 rtt_us = 2;
+  }
+  repeated Rtt rtts = 1;
+}
+
+// The relay both peers use if the direct attempt fails (the one with the lowest RTT_A + RTT_B),
+// and a token it accepts (see relay/protocol.hpp). Both peers get the same token.
+message RelayGrant {
+  Relay relay = 1;
+  bytes token = 2;
+}
+
+// "We are on the relay; let us try the direct path again." The agent sends fresh Candidates
+// first, since its NAT mappings may have changed.
+message RetryDirect {}
+
 message AgentMsg {
   oneof msg {
     Register register = 1;
     Candidates candidates = 2;
     Pong pong = 3;
+    RelayRtts relay_rtts = 4;
+    RetryDirect retry_direct = 5;
   }
 }
 
@@ -82,5 +116,7 @@ message CoordMsg {
     Candidates peer_candidates = 2;
     SessionKey session_key = 3;
     PunchIn punch_in = 4;
+    RelayList relay_list = 5;
+    RelayGrant relay_grant = 6;
   }
 }

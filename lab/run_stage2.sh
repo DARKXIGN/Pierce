@@ -4,9 +4,15 @@
 #   sudo ./lab/run_stage2.sh baseline [results_dir]   # all 5×5 combinations -> stage2_baseline.csv
 #   sudo ./lab/run_stage2.sh delay    [results_dir]   # extra delay on one side -> stage2_delay.csv
 #   sudo ./lab/run_stage2.sh stage3   [results_dir]   # with stage 3 techniques -> stage3_improved.csv
+#   sudo ./lab/run_stage2.sh upgrade  [results_dir]   # relay -> direct upgrades -> stage3_upgrade.csv
 #
 # baseline and delay run plain stage 2 hole punching. stage3 runs the same 5×5 matrix with the
-# stage 3 techniques switched on (so far: NAT mapping characterization + port prediction).
+# stage 3 techniques switched on: NAT mapping characterization, port prediction, birthday
+# probing, and the relay fallback after the 3 s direct attempt (two relays in obs; the
+# coordination server picks the one with the lowest RTT_A + RTT_B).
+# upgrade holds each connection for UPGRADE_HOLD seconds (default 16) and lets a relayed
+# connection retry the direct path every UPGRADE_RETRY_MS (default 5000; 30000 in production,
+# shortened so the experiment fits in minutes), recording how long until it upgraded.
 #
 # Environment: ATTEMPTS (per combination, default 100), ONLY_A (limit NAT A types, baseline),
 #   DELAYS (delay mode, ms on natA's WAN link, default "0 50 100 200"),
@@ -14,8 +20,10 @@
 #   symmetric-random:restricted"), PIERCE_BUILD (build directory, default ./build).
 #
 # One attempt = both agents start at the same time; success = both got an authenticated probe
-# response within 3 s. time_to_connect_ms is the slower side's, probes_sent the sum of both sides,
-# path "direct" on success and "none" on failure (there is no relay until stage 3).
+# response directly within 3 s. path is "direct", "relay" (both fell back to the relay and
+# reached each other through it; success stays 0, because the headline is the direct rate) or
+# "none". time_to_connect_ms is the slower side's over the path that won, empty for "none";
+# probes_sent is the sum of both sides.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
@@ -26,19 +34,31 @@ mode=${1:-baseline}
 results=${2:-"$here/../results"}
 build=${PIERCE_BUILD:-"$here/../build"}
 attempts=${ATTEMPTS:-100}
-for bin in stun_server pierce-coord pierce-agent usernat; do
+for bin in stun_server pierce-coord pierce-agent pierce-relay usernat; do
   [[ -x $build/$bin ]] || { echo "missing $build/$bin: cmake -B build && cmake --build build" >&2; exit 1; }
 done
 mkdir -p "$results"
 COORD="$OBS_IP1:50051"
 STUN="$OBS_IP1:3478"
+RELAYS=("$OBS_IP1:3480" "$OBS_IP2:3480")
+RELAY_SECRET=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')  # fresh per run, never stored
 
-# start_servers: STUN + coordination server in the obs namespace. Sets $servers (pids).
+# start_servers: STUN + coordination server (+ relays in stage3/upgrade) in obs. Sets $servers.
 start_servers() {
   ip netns exec "$NS_OBS" "$build/stun_server" --ip "$OBS_IP1" --alt-ip "$OBS_IP2" >/dev/null 2>&1 &
-  local s=$!
-  ip netns exec "$NS_OBS" "$build/pierce-coord" --listen "$COORD" >/dev/null 2>&1 &
-  servers="$s $!"
+  servers="$!"
+  local coord_args=(--listen "$COORD")
+  if [[ $use_relays == 1 ]]; then
+    local r
+    for r in "${RELAYS[@]}"; do
+      ip netns exec "$NS_OBS" "$build/pierce-relay" --listen "$r" --secret "$RELAY_SECRET" >/dev/null 2>&1 &
+      servers+=" $!"
+      coord_args+=(--relay "$r")
+    done
+    coord_args+=(--relay-secret "$RELAY_SECRET")
+  fi
+  ip netns exec "$NS_OBS" "$build/pierce-coord" "${coord_args[@]}" >/dev/null 2>&1 &
+  servers+=" $!"
   sleep 0.3
 }
 # common.sh enables set -e; wait returns the killed server's status (143), which is expected.
@@ -53,11 +73,12 @@ attempt() {
   local pa=$!
   ns_exec "$NS_PEER_B" "$build/pierce-agent" "${args[@]}" --id B --peer A >"$rb" 2>/dev/null
   wait "$pa" || true  # a crashed agent still printed a failure line
-  # Each agent printed "success,time_ms,probes,path,remote".
+  # Each agent printed "direct,time_ms,probes,path,remote".
   paste -d, "$ra" "$rb" | awk -F, -v p="$prefix" '{
-      ok = ($1 == 1 && $6 == 1); ms = ""
-      if (ok) ms = ($2 > $7) ? $2 : $7
-      print p "," ok "," ms "," ($3 + $8) "," (ok ? "direct" : "none") }' >> "$out"
+      ok = ($1 == 1 && $6 == 1)
+      path = ok ? "direct" : (($4 == "relay" && $9 == "relay") ? "relay" : "none")
+      ms = (path == "none") ? "" : (($2 > $7) ? $2 : $7)
+      print p "," ok "," ms "," ($3 + $8) "," path }' >> "$out"
   rm -f "$ra" "$rb"
 }
 
@@ -78,16 +99,55 @@ run_combo() {
     if [[ -n $delay ]]; then attempt "$a,$b,$delay,$i"; else attempt "$a,$b,$i"; fi
   done
   stop_servers
-  local ok
+  local ok relayed
   ok=$(awk -F, -v a="$a" -v b="$b" -v d="$delay" \
     '$1==a && $2==b && (d=="" || $3==d) && $(NF-3)==1' "$out" | wc -l)
-  printf '%-21s %-21s %s%s/%s direct\n' "$a" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts"
+  relayed=$(awk -F, -v a="$a" -v b="$b" -v d="$delay" \
+    '$1==a && $2==b && (d=="" || $3==d) && $NF=="relay"' "$out" | wc -l)
+  printf '%-21s %-21s %s%s/%s direct%s\n' "$a" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts" \
+    "$([[ $use_relays == 1 ]] && echo ", $relayed relay")"
+}
+
+# upgrade_attempt <a> <b> <i>: one held connection; appends "a,b,i,initial_path,upgrade_ms".
+upgrade_attempt() {
+  local a=$1 b=$2 i=$3 ea eb oa
+  ea=$(mktemp); eb=$(mktemp); oa=$(mktemp)
+  local args=(--coord "$COORD" --stun "$STUN" "${agent_extra[@]}" --hold "${UPGRADE_HOLD:-16}"
+              --keepalive-ms 1000 --retry-direct-ms "${UPGRADE_RETRY_MS:-5000}")
+  ns_exec "$NS_PEER_A" "$build/pierce-agent" "${args[@]}" --id A --peer B >"$oa" 2>"$ea" &
+  local pa=$!
+  ns_exec "$NS_PEER_B" "$build/pierce-agent" "${args[@]}" --id B --peer A >/dev/null 2>"$eb"
+  wait "$pa" || true
+  # Both sides must have upgraded; the slower one counts.
+  local path ua ub up=""
+  path=$(cut -d, -f4 "$oa")
+  ua=$(sed -n 's/^upgrade_ms=//p' "$ea"); ub=$(sed -n 's/^upgrade_ms=//p' "$eb")
+  if [[ -n $ua && -n $ub ]]; then up=$(( ua > ub ? ua : ub )); fi
+  echo "$a,$b,$i,${path:-none},$up" >> "$out"
+  rm -f "$ea" "$eb" "$oa"
 }
 
 agent_extra=()
+use_relays=0
 case $mode in
+  upgrade)
+    agent_extra=(--stun-alt-ip "$OBS_IP2" --stun-alt-port 3479)
+    use_relays=1
+    out=$results/stage3_upgrade.csv
+    echo "natA,natB,attempt,initial_path,upgrade_ms" > "$out"
+    for pair in ${UPGRADE_PAIRS:-symmetric-random:port-restricted port-restricted:symmetric-random}; do
+      a=${pair%%:*} b=${pair##*:}
+      "$here/teardown.sh" >/dev/null 2>&1
+      "$here/setup.sh" "$a" "$b" >/dev/null 2>&1 || { echo "setup failed: $a $b" >&2; continue; }
+      start_servers
+      for ((i = 1; i <= ${ATTEMPTS:-20}; i++)); do upgrade_attempt "$a" "$b" "$i"; done
+      stop_servers
+      awk -F, -v a="$a" -v b="$b" '$1==a && $2==b {n++; if ($4=="relay") r++; if ($5!="") u++}
+        END {printf "%-21s %-21s %d attempts, %d started on the relay, %d of those upgraded\n", a, b, n, r, u}' "$out"
+    done ;;
   stage3)
     agent_extra=(--stun-alt-ip "$OBS_IP2" --stun-alt-port 3479)
+    use_relays=1
     out=$results/stage3_improved.csv
     echo "natA,natB,attempt,success,time_to_connect_ms,probes_sent,path" > "$out"
     for a in ${ONLY_A:-"${NAT_TYPES[@]}"}; do
@@ -115,7 +175,7 @@ case $mode in
     for pair in ${DELAY_PAIRS:-full:full port-restricted:port-restricted symmetric-random:restricted}; do
       for d in ${DELAYS:-0 50 100 200}; do run_combo "${pair%%:*}" "${pair##*:}" "$d"; done
     done ;;
-  *) echo "usage: $0 baseline|delay|stage3 [results_dir]" >&2; exit 2 ;;
+  *) echo "usage: $0 baseline|delay|stage3|upgrade [results_dir]" >&2; exit 2 ;;
 esac
 "$here/teardown.sh" >/dev/null 2>&1
 echo "wrote $out"

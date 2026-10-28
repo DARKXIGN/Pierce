@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -26,7 +27,7 @@ using TransactionId = std::array<std::uint8_t, 12>;
 struct Endpoint {
   std::array<std::uint8_t, 4> ipv4{};  // IPv4 only for now
   std::uint16_t port = 0;
-  bool operator==(const Endpoint&) const = default;
+  auto operator<=>(const Endpoint&) const = default;  // ==, <, ... (e.g. as a std::map key)
 };
 
 struct Message {

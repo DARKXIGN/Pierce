@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "coord/db.hpp"
+#include "coord/service.hpp"
 #include "coord/timing.hpp"
 
 using namespace std::chrono_literals;
@@ -28,4 +29,11 @@ TEST(NodeDb, UpsertAndUpdate) {
   db.set_candidates("A", "srflx 203.0.113.1:4000");
   db.set_rtt("A", 1.5);
   EXPECT_EQ(db.count_nodes(), 2);
+}
+
+TEST(PickRelay, LowestSumReachedByBoth) {
+  // Relay 0: 10 + 90 = 100. Relay 1: 40 + 40 = 80. Relay 2: only A reached it.
+  std::map<std::uint32_t, std::uint32_t> a = {{0, 10}, {1, 40}, {2, 1}}, b = {{0, 90}, {1, 40}};
+  EXPECT_EQ(coord::pick_relay(3, a, b), 1u);
+  EXPECT_EQ(coord::pick_relay(3, {}, {}), 0u);  // nothing measured: the default
 }

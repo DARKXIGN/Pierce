@@ -3,6 +3,9 @@
 #   sudo ./lab/check_coord_outage.sh [natA] [natB]        (default: port-restricted port-restricted)
 # Connects A and B, kills the coordination and STUN servers, then lets both agents send a
 # keepalive every 500 ms for 10 s. PASS if both still get (nearly) every keepalive answered.
+# A relay runs too and stays up, so a pair that cannot connect directly (e.g. symmetric-random
+# symmetric-random) checks that a relayed path survives the outage: the relay checks its tokens
+# without the coordination server.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
@@ -17,9 +20,12 @@ tmp=$(mktemp -d)
 cleanup() { "$here/teardown.sh" >/dev/null 2>&1; rm -rf "$tmp"; }
 trap cleanup EXIT
 
+secret=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 ip netns exec "$NS_OBS" "$build/stun_server" --ip "$OBS_IP1" --alt-ip "$OBS_IP2" >/dev/null 2>&1 &
 stun_pid=$!
-ip netns exec "$NS_OBS" "$build/pierce-coord" --listen "$OBS_IP1:50051" >/dev/null 2>&1 &
+ip netns exec "$NS_OBS" "$build/pierce-relay" --listen "$OBS_IP1:3480" --secret "$secret" >/dev/null 2>&1 &
+ip netns exec "$NS_OBS" "$build/pierce-coord" --listen "$OBS_IP1:50051" \
+  --relay "$OBS_IP1:3480" --relay-secret "$secret" >/dev/null 2>&1 &
 coord_pid=$!
 sleep 0.3
 
@@ -29,18 +35,20 @@ pa=$!
 ip netns exec "$NS_PEER_B" "$build/pierce-agent" "${args[@]}" --id B --peer A >"$tmp/b.out" 2>"$tmp/b.err" &
 pb=$!
 
-# Wait until both say "connected", then pull the plug on the servers.
-for _ in $(seq 50); do
+# Wait until both say "connected" (up to 8 s: a relayed connect takes about 3 s), then pull the
+# plug on the servers.
+for _ in $(seq 80); do
   grep -q connected "$tmp/a.err" && grep -q connected "$tmp/b.err" && break
   sleep 0.1
 done
 if ! grep -q connected "$tmp/a.err" || ! grep -q connected "$tmp/b.err"; then
   echo "FAIL  peers did not connect ($a x $b)"; exit 1
 fi
+echo "connected over: $(cut -d, -f4 "$tmp/a.out")"
 kill "$coord_pid" "$stun_pid"
 wait "$coord_pid" "$stun_pid" 2>/dev/null || true  # 143 = killed, as intended (common.sh sets -e)
 kill -0 "$coord_pid" 2>/dev/null && { echo "FAIL  coordination server still running"; exit 1; }
-echo "coordination server killed after connect; holding for 10 s"
+echo "coordination and STUN servers killed after connect (relay stays up); holding for 10 s"
 
 wait "$pa" "$pb" || true
 rc=0

@@ -2,7 +2,7 @@
 //
 //   pierce-agent --coord 203.0.113.10:50051 --stun 203.0.113.10:3478 --id A --peer B
 //                [--stun-alt-ip 203.0.113.11] [--stun-alt-port 3479] [--predict-window 32]
-//                [--birthday 256]
+//                [--birthday 256] [--retry-direct-ms 30000]
 //                [--timeout-ms 3000] [--signal-timeout-ms 5000] [--interval-ms 20]
 //                [--hold SEC] [--keepalive-ms 25000]
 //
@@ -12,10 +12,16 @@
 // If one side's NAT maps randomly and the other's is a cone, they do birthday probing: the random
 // side probes from --birthday extra sockets, the cone side guesses as many ports (0 = off).
 //
-// Prints one line to stdout:  success,time_to_connect_ms,probes_sent,path,remote
-//   e.g. 1,142,7,direct,203.0.113.2:41000      or      0,,150,none,
+// Prints one line to stdout:  direct,time_to_connect_ms,probes_sent,path,remote
+//   1,142,7,direct,203.0.113.2:41000     connected directly
+//   0,3071,160,relay,203.0.113.10:3480   direct failed, connected through the relay
+//   0,,150,none,                         neither
 // time_to_connect_ms runs from sending Register (start of signaling) to the first authenticated
-// probe response. With --hold, stays connected for SEC seconds sending keepalives, which needs no
+// probe response, over whichever path won. The direct attempt gets --timeout-ms (3 s); if it
+// fails and the coordination server granted a relay, the agent binds to it and probes through it.
+// While relayed and holding (--hold), it asks for a new direct attempt every --retry-direct-ms
+// (0 = never) and reports "upgrade_ms=N" on stderr if one succeeds (time since the relay
+// connected). With --hold, stays connected for SEC seconds sending keepalives, which needs no
 // coordination server, and reports "keepalive sent=N answered=M" on stderr.
 #include <grpcpp/grpcpp.h>
 
@@ -32,6 +38,7 @@
 #include "agent/candidates.hpp"
 #include "agent/predict.hpp"
 #include "agent/punch.hpp"
+#include "agent/relay_client.hpp"
 #include "coord.grpc.pb.h"
 #include "stun/client.hpp"
 #include "stun/udp.hpp"
@@ -47,7 +54,8 @@ namespace pb = pierce::coord;
   std::fputs(
       "usage: pierce-agent --coord HOST:PORT --stun IP:PORT --id ID --peer ID [--stun-alt-ip IP]\n"
       "                    [--stun-alt-port N] [--predict-window N] [--birthday N] [--timeout-ms N]\n"
-      "                    [--signal-timeout-ms N] [--interval-ms N] [--hold SEC] [--keepalive-ms N]\n",
+      "                    [--signal-timeout-ms N] [--interval-ms N] [--hold SEC] [--keepalive-ms N]\n"
+      "                    [--retry-direct-ms N]\n",
       stderr);
   std::exit(2);
 }
@@ -106,8 +114,21 @@ struct Signal {
   probe::Key key;
   std::optional<std::chrono::milliseconds> punch_delay;
   Clock::time_point punch_received{};
+  std::vector<stun::Endpoint> relays;  // from RelayList, to measure
+  bool relays_pending = false;
+  std::uint64_t punch_seq = 0;  // counts PunchIn messages, so a retry can wait for a new one
+  std::optional<stun::Endpoint> relay;  // from RelayGrant
+  relay::TokenBytes relay_token{};
   bool closed = false;
 };
+
+std::optional<stun::Endpoint> from_proto(const pb::Relay& r) {
+  if (r.ipv4().size() != 4 || r.port() == 0 || r.port() > 65535) return std::nullopt;
+  stun::Endpoint ep;
+  std::copy(r.ipv4().begin(), r.ipv4().end(), ep.ipv4.begin());
+  ep.port = static_cast<std::uint16_t>(r.port());
+  return ep;
+}
 
 }  // namespace
 
@@ -122,6 +143,7 @@ int main(int argc, char** argv) try {
   auto signal_timeout = std::chrono::milliseconds(5000);
   int hold_s = 0;
   auto keepalive = std::chrono::milliseconds(25000);
+  auto retry_direct = std::chrono::milliseconds(30000);
   for (int i = 1; i < argc; ++i) {
     std::string_view a = argv[i];
     auto value = [&] {
@@ -142,6 +164,7 @@ int main(int argc, char** argv) try {
     else if (a == "--interval-ms") popt.interval = ms();
     else if (a == "--hold") hold_s = std::atoi(value().c_str());
     else if (a == "--keepalive-ms") keepalive = ms();
+    else if (a == "--retry-direct-ms") retry_direct = ms();
     else usage();
   }
   if (coord_addr.empty() || !stun_server || id.empty() || peer.empty() || id == peer) usage();
@@ -154,24 +177,37 @@ int main(int argc, char** argv) try {
   // 1. One UDP socket for everything: STUN, probes (and WireGuard later). NAT mappings belong to
   //    a socket, so the address STUN reports is only useful if the probes leave from it too.
   stun::UdpSocket sock;
-  std::vector<Candidate> mine = agent::host_candidates(sock.local_endpoint().port);
-  auto ask = [&](const stun::Endpoint& to) -> std::optional<stun::Endpoint> {
-    if (auto r = stun::binding(sock, to, 0, std::chrono::milliseconds(200), 3)) return r->xor_mapped;
-    return std::nullopt;
-  };
+  std::vector<Candidate> mine;
   agent::NatInfo my_nat;
-  if (auto srflx = ask(*stun_server)) {
-    mine.push_back({CandidateType::ServerReflexive, *srflx,
-                    agent::priority(CandidateType::ServerReflexive)});
-    // Same socket, two more destinations: does the public port change, and how?
-    if (stun_alt_ip) {
-      auto p2 = ask({*stun_alt_ip, stun_server->port});
-      auto p3 = ask({stun_server->ipv4, stun_alt_port});
-      if (p2 && p3) my_nat = agent::characterize(srflx->port, p2->port, p3->port);
+  // Gather host and server-reflexive candidates and characterize the NAT's mapping. Run again
+  // before each retry of the direct path, because the NAT's mappings may have changed since.
+  auto gather = [&] {
+    mine = agent::host_candidates(sock.local_endpoint().port);
+    my_nat = {};
+    auto ask = [&](const stun::Endpoint& to) -> std::optional<stun::Endpoint> {
+      if (auto r = stun::binding(sock, to, 0, std::chrono::milliseconds(200), 3)) return r->xor_mapped;
+      return std::nullopt;
+    };
+    if (auto srflx = ask(*stun_server)) {
+      mine.push_back({CandidateType::ServerReflexive, *srflx,
+                      agent::priority(CandidateType::ServerReflexive)});
+      // Same socket, two more destinations: does the public port change, and how?
+      if (stun_alt_ip) {
+        auto p2 = ask({*stun_alt_ip, stun_server->port});
+        auto p3 = ask({stun_server->ipv4, stun_alt_port});
+        if (p2 && p3) my_nat = agent::characterize(srflx->port, p2->port, p3->port);
+      }
+    } else {
+      std::fputs("pierce-agent: no STUN response; host candidates only\n", stderr);
     }
-  } else {
-    std::fputs("pierce-agent: no STUN response; host candidates only\n", stderr);
-  }
+  };
+  auto candidates_msg = [&] {
+    pb::AgentMsg cands;
+    for (const auto& c : mine) *cands.mutable_candidates()->add_candidates() = to_proto(c);
+    *cands.mutable_candidates()->mutable_nat() = to_proto(my_nat);
+    return cands;
+  };
+  gather();
 
   // 2. Signaling.
   // Never go through an HTTP proxy from the environment (http_proxy etc.): the coordination
@@ -192,13 +228,16 @@ int main(int argc, char** argv) try {
   pb::AgentMsg reg;
   reg.mutable_register_()->set_node_id(id);
   reg.mutable_register_()->set_peer_id(peer);
-  pb::AgentMsg cands;
-  for (const auto& c : mine) *cands.mutable_candidates()->add_candidates() = to_proto(c);
-  *cands.mutable_candidates()->mutable_nat() = to_proto(my_nat);
   stream->Write(reg);
-  stream->Write(cands);
+  stream->Write(candidates_msg());
 
-  // From here on only the reader thread writes to the stream (Pongs), so writes never overlap.
+  // A gRPC stream takes one writer at a time: the reader thread writes Pongs, the main thread
+  // RelayRtts, so both go through write().
+  std::mutex write_mu;
+  auto write = [&](const pb::AgentMsg& msg) {
+    std::lock_guard lock(write_mu);
+    stream->Write(msg);
+  };
   Signal sig;
   std::thread reader([&] {
     pb::CoordMsg m;
@@ -206,7 +245,7 @@ int main(int argc, char** argv) try {
       if (m.has_ping()) {
         pb::AgentMsg pong;
         pong.mutable_pong()->set_nonce(m.ping().nonce());
-        stream->Write(pong);
+        write(pong);
         continue;
       }
       std::lock_guard lock(sig.mu);
@@ -220,6 +259,16 @@ int main(int argc, char** argv) try {
       } else if (m.has_punch_in()) {
         sig.punch_delay = std::chrono::milliseconds(m.punch_in().delay_ms());
         sig.punch_received = Clock::now();
+        ++sig.punch_seq;
+      } else if (m.has_relay_list()) {
+        sig.relays.clear();
+        for (const auto& r : m.relay_list().relays())
+          if (auto ep = from_proto(r)) sig.relays.push_back(*ep);
+        sig.relays_pending = !sig.relays.empty();
+      } else if (m.has_relay_grant() && m.relay_grant().token().size() == relay::kTokenSize) {
+        sig.relay = from_proto(m.relay_grant().relay());
+        std::copy(m.relay_grant().token().begin(), m.relay_grant().token().end(),
+                  sig.relay_token.begin());
       }
       sig.cv.notify_all();
     }
@@ -233,75 +282,177 @@ int main(int argc, char** argv) try {
     reader.join();
   };
 
-  std::vector<Candidate> peer_cands;
-  agent::NatInfo peer_nat;
-  probe::Key key;
-  Clock::time_point punch_at;
-  {
+  // What one direct attempt needs from signaling.
+  struct Plan {
+    std::vector<Candidate> peer_cands;
+    agent::NatInfo peer_nat;
+    probe::Key key;
+    Clock::time_point punch_at;
+  };
+  std::optional<stun::Endpoint> relay_ep;
+  relay::TokenBytes relay_token{};
+  // Waits for a PunchIn newer than `seen`; measures relays meanwhile if the server offered some.
+  auto wait_plan = [&](std::uint64_t seen) -> std::optional<Plan> {
     std::unique_lock lock(sig.mu);
-    const bool got = sig.cv.wait_for(lock, signal_timeout, [&] {
-      return sig.closed || (sig.punch_delay && !sig.key.empty());
-    });
-    if (!got || !sig.punch_delay || sig.key.empty() || sig.peer_candidates.empty()) {
+    const auto deadline = Clock::now() + signal_timeout;
+    bool got = false;
+    for (;;) {
+      got = sig.cv.wait_until(lock, deadline, [&] {
+        return sig.closed || sig.relays_pending || (sig.punch_seq > seen && !sig.key.empty());
+      });
+      if (!got || !sig.relays_pending) break;
+      // While the server pairs us, measure the relays it offered so it can pick the closest one.
+      // This runs on the main socket, which is idle until the punch.
+      auto relays = sig.relays;
+      sig.relays_pending = false;
       lock.unlock();
-      std::fputs("pierce-agent: no PunchIn from the coordination server\n", stderr);
-      stop_signaling();
-      return fail(0);
+      pb::AgentMsg rtts;
+      for (const auto& [i, us] : agent::measure_relays(sock, relays, std::chrono::milliseconds(300))) {
+        auto* r = rtts.mutable_relay_rtts()->add_rtts();
+        r->set_index(i);
+        r->set_rtt_us(us);
+      }
+      write(rtts);
+      lock.lock();
     }
-    peer_cands = sig.peer_candidates;
-    peer_nat = sig.peer_nat;
-    key = sig.key;
-    punch_at = sig.punch_received + *sig.punch_delay;
+    if (!got || sig.punch_seq <= seen || sig.key.empty() || sig.peer_candidates.empty())
+      return std::nullopt;
+    relay_ep = sig.relay;
+    relay_token = sig.relay_token;
+    return Plan{sig.peer_candidates, sig.peer_nat, sig.key, sig.punch_received + *sig.punch_delay};
+  };
+  auto punch_seq = [&] {
+    std::lock_guard lock(sig.mu);
+    return sig.punch_seq;
+  };
+
+  auto plan = wait_plan(0);
+  if (!plan) {
+    std::fputs("pierce-agent: no PunchIn from the coordination server\n", stderr);
+    stop_signaling();
+    return fail(0);
   }
 
-  // Stage 3 techniques, chosen from both sides' NAT mapping. They need the peer's public IP (its
-  // srflx candidate); predictions and guesses never go to any other address.
-  using agent::Mapping;
-  auto peer_srflx = std::find_if(peer_cands.begin(), peer_cands.end(), [](const Candidate& c) {
-    return c.type == CandidateType::ServerReflexive;
-  });
-  std::vector<stun::UdpSocket> birthday_socks;
-  std::optional<stun::Endpoint> birthday_target;
-  if (peer_srflx != peer_cands.end()) {
-    const auto peer_ip = peer_srflx->ep.ipv4;
-    // Peer behind a sequential NAT: probe the ports it will use next.
-    const bool we_seq = my_nat.mapping == Mapping::SymmetricSequential;
-    auto predicted =
-        agent::predicted_candidates(peer_ip, peer_nat, we_seq, mine.size(), predict_window);
-    peer_cands.insert(peer_cands.end(), predicted.begin(), predicted.end());
-    // Random mapping on one side, cone on the other: birthday probing.
-    if (my_nat.mapping == Mapping::EndpointIndependent &&
-        peer_nat.mapping == Mapping::SymmetricRandom) {
-      auto guesses = agent::guessed_candidates(peer_ip, birthday);
-      peer_cands.insert(peer_cands.end(), guesses.begin(), guesses.end());
-    } else if (my_nat.mapping == Mapping::SymmetricRandom &&
-               peer_nat.mapping == Mapping::EndpointIndependent && birthday > 0) {
-      for (int i = 0; i < birthday; ++i) birthday_socks.emplace_back();
-      birthday_target = peer_srflx->ep;
+  // One direct attempt. Kept in a heap object because the Puncher refers to its sockets.
+  struct DirectAttempt {
+    std::vector<stun::UdpSocket> birthday_socks;
+    std::optional<agent::Puncher> puncher;
+    agent::PunchResult res;
+  };
+  auto try_direct = [&](const Plan& p) {
+    auto at = std::make_unique<DirectAttempt>();
+    auto peer_cands = p.peer_cands;
+    // Stage 3 techniques, chosen from both sides' NAT mapping. They need the peer's public IP (its
+    // srflx candidate); predictions and guesses never go to any other address.
+    using agent::Mapping;
+    auto peer_srflx = std::find_if(peer_cands.begin(), peer_cands.end(), [](const Candidate& c) {
+      return c.type == CandidateType::ServerReflexive;
+    });
+    std::optional<stun::Endpoint> birthday_target;
+    if (peer_srflx != peer_cands.end()) {
+      const auto peer_ip = peer_srflx->ep.ipv4;
+      const auto peer_srflx_ep = peer_srflx->ep;  // the insertions below invalidate peer_srflx
+      // Peer behind a sequential NAT: probe the ports it will use next.
+      const bool we_seq = my_nat.mapping == Mapping::SymmetricSequential;
+      auto predicted =
+          agent::predicted_candidates(peer_ip, p.peer_nat, we_seq, mine.size(), predict_window);
+      peer_cands.insert(peer_cands.end(), predicted.begin(), predicted.end());
+      // Random mapping on one side, cone on the other: birthday probing.
+      if (my_nat.mapping == Mapping::EndpointIndependent &&
+          p.peer_nat.mapping == Mapping::SymmetricRandom) {
+        auto guesses = agent::guessed_candidates(peer_ip, birthday);
+        peer_cands.insert(peer_cands.end(), guesses.begin(), guesses.end());
+      } else if (my_nat.mapping == Mapping::SymmetricRandom &&
+                 p.peer_nat.mapping == Mapping::EndpointIndependent && birthday > 0) {
+        for (int i = 0; i < birthday; ++i) at->birthday_socks.emplace_back();
+        birthday_target = peer_srflx_ep;
+      }
     }
-  }
+    // Wait for the agreed moment, then probe.
+    std::this_thread::sleep_until(p.punch_at);
+    at->puncher.emplace(sock, p.key, peer_cands);
+    if (birthday_target) at->puncher->add_birthday_sockets(at->birthday_socks, *birthday_target);
+    at->res = at->puncher->connect(popt);
+    return at;
+  };
 
-  // 3. Punch: wait for the agreed moment, then probe.
-  std::this_thread::sleep_until(punch_at);
-  agent::Puncher puncher(sock, key, peer_cands);
-  if (birthday_target) puncher.add_birthday_sockets(birthday_socks, *birthday_target);
-  const auto res = puncher.connect(popt);
+  // 3. Punch.
+  auto direct = try_direct(*plan);
+  auto& puncher = *direct->puncher;
+  auto res = direct->res;
+  agent::Puncher* active = &puncher;
+  const char* path_name = "direct";
+  int probes = puncher.probes_sent();
+
+  // 4. Direct failed: fall back to the relay. Both peers reach this point at about the same
+  //    time (same punch moment, same timeout), bind with the shared token, and probe each other
+  //    through it. The relay is just another candidate whose packets the relay forwards.
+  std::optional<agent::Puncher> via_relay;
+  if (!res.success && relay_ep &&
+      agent::bind_relay(sock, *relay_ep, relay_token, std::chrono::milliseconds(200), 5)) {
+    via_relay.emplace(sock, plan->key,
+                      std::vector<Candidate>{{CandidateType::Relayed, *relay_ep,
+                                              agent::priority(CandidateType::Relayed)}});
+    agent::PunchOptions ropt = popt;
+    ropt.timeout = std::chrono::milliseconds(2000);
+    res = via_relay->connect(ropt);
+    probes += via_relay->probes_sent();
+    active = &*via_relay;
+    path_name = "relay";
+  }
   if (!res.success) {
     stop_signaling();
-    return fail(puncher.probes_sent());
+    return fail(probes);
   }
   const auto ttc =
       std::chrono::duration_cast<std::chrono::milliseconds>(res.connected_at - signaling_start);
-  std::printf("1,%lld,%d,direct,%s\n", static_cast<long long>(ttc.count()), puncher.probes_sent(),
-              stun::to_string(*res.path).c_str());
+  std::printf("%d,%lld,%d,%s,%s\n", via_relay ? 0 : 1, static_cast<long long>(ttc.count()), probes,
+              path_name, stun::to_string(*res.path).c_str());
   std::fflush(stdout);
 
-  // 4. Optionally stay connected. Keepalives are peer to peer: the coordination server may die.
+  // 5. Optionally stay connected. Keepalives are peer to peer (or through the relay, which checks
+  //    tokens on its own): the coordination server may die.
   if (hold_s > 0) {
     std::fputs("connected\n", stderr);
-    const auto stats =
-        puncher.hold(res.local, *res.path, std::chrono::seconds(hold_s), keepalive);
-    std::fprintf(stderr, "keepalive sent=%d answered=%d\n", stats.sent, stats.answered);
+    agent::HoldStats total;
+    const auto hold_end = Clock::now() + std::chrono::seconds(hold_s);
+    const auto relayed_since = res.connected_at;
+    auto next_retry = relayed_since + retry_direct;
+    bool relayed = via_relay.has_value();
+    for (auto now = Clock::now(); now < hold_end; now = Clock::now()) {
+      const bool retry_due = relayed && retry_direct.count() > 0;
+      const auto chunk_end = retry_due ? std::min(hold_end, next_retry) : hold_end;
+      if (chunk_end > now) {
+        const auto st = active->hold(res.local, *res.path,
+                                     std::chrono::ceil<std::chrono::milliseconds>(chunk_end - now),
+                                     keepalive);
+        total.sent += st.sent;
+        total.answered += st.answered;
+      }
+      if (!retry_due || Clock::now() < next_retry || Clock::now() >= hold_end) continue;
+      next_retry += retry_direct;
+      // The give-up rule's second half: while relayed, try the direct path again. This needs the
+      // coordination server for a fresh punch moment; if it is gone we just stay on the relay.
+      const auto seen = punch_seq();
+      gather();
+      write(candidates_msg());
+      pb::AgentMsg retry;
+      retry.mutable_retry_direct();
+      write(retry);
+      auto p2 = wait_plan(seen);
+      if (!p2) continue;
+      auto again = try_direct(*p2);
+      if (!again->res.success) continue;
+      // Upgraded: from now on keepalives go directly.
+      const auto up = std::chrono::duration_cast<std::chrono::milliseconds>(
+          again->res.connected_at - relayed_since);
+      std::fprintf(stderr, "upgrade_ms=%lld\n", static_cast<long long>(up.count()));
+      direct = std::move(again);
+      active = &*direct->puncher;
+      res = direct->res;
+      relayed = false;
+    }
+    std::fprintf(stderr, "keepalive sent=%d answered=%d\n", total.sent, total.answered);
   }
   stop_signaling();
   return 0;

@@ -57,6 +57,19 @@ class EndToEnd(unittest.TestCase):
         out = report.splice(readme, "x", "new")
         self.assertEqual(out, "a\n<!-- report:x:start -->\nnew\n<!-- report:x:end -->\nb\n")
 
+    def test_relay_table_only_when_relayed(self):
+        rows = ["natA,natB,attempt,success,time_to_connect_ms,probes_sent,path"]
+        rows += [f"full,full,{i},1,40,4,direct" for i in range(1, 11)]
+        plain = report.render(*report.load([self.write("\n".join(rows) + "\n")],
+                                           "time_to_connect_ms"), "Time to connect")
+        self.assertNotIn("Relay usage", plain)
+        rows += [f"symmetric-random,symmetric-random,{i},0,3100,300,relay" for i in range(1, 11)]
+        body = report.render(*report.load([self.write("\n".join(rows) + "\n")],
+                                          "time_to_connect_ms"), "Time to connect")
+        self.assertIn("Relay usage", body)
+        self.assertIn("| symmetric-random | — | — | — | 100% [72–100] | — |",
+                      body.split("Relay usage")[1])
+
     def test_pivot_by_column(self):
         rows = ["natA,natB,delay_ms,attempt,success,time_to_connect_ms,probes_sent,path"]
         for d in ("200", "0", "50"):
