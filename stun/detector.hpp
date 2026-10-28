@@ -47,7 +47,6 @@ class Detector {
   NatType detect() { return classify(observe()); }
 
  private:
-  // Sends a Binding Request (retransmitting) and returns the matching response, if any.
   std::optional<Message> transact(UdpSocket& sock, const Endpoint& to, std::uint8_t change);
   UdpSocket& fresh_socket();
 
