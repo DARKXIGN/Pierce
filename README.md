@@ -97,6 +97,35 @@ Same 5×5 matrix with the stage 3 techniques on. Success is still the **direct**
 - **Triggered checks** on every incoming request (also a change to the stage 2 code path).
 
 <!-- report:stage3:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 66% [56–75] | 100% [96–100] |
+| symmetric-random | 100% [96–100] | 100% [96–100] | 64% [54–73] | 0% [0–4] | 0% [0–4] |
+| symmetric-sequential | 100% [96–100] | 100% [96–100] | 100% [96–100] | 0% [0–4] | 100% [96–100] |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 47 / 50 | 46 / 49 | 46 / 50 | 29 / 43 | 48 / 51 |
+| restricted | 47 / 52 | 47 / 51 | 47 / 50 | 31 / 45 | 47 / 57 |
+| port-restricted | 47 / 51 | 46 / 50 | 46 / 51 | 240 / 336 | 70 / 74 |
+| symmetric-random | 65 / 90 | 60 / 83 | 237 / 346 | — | — |
+| symmetric-sequential | 48 / 51 | 48 / 52 | 70 / 74 | — | 55 / 59 |
+
+Relay usage: attempts that fell back to the relay [Wilson 95% CI].
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| restricted | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| port-restricted | 0% [0–4] | 0% [0–4] | 0% [0–4] | 34% [25–44] | 0% [0–4] |
+| symmetric-random | 0% [0–4] | 0% [0–4] | 36% [27–46] | 100% [96–100] | 100% [96–100] |
+| symmetric-sequential | 0% [0–4] | 0% [0–4] | 0% [0–4] | 100% [96–100] | 0% [0–4] |
 <!-- report:stage3:end -->
 
 #### Relay → direct upgrade
