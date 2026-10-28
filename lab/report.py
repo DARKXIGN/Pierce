@@ -2,6 +2,7 @@
 """Turn per-attempt CSVs into the README's NAT A x NAT B tables. Never edit those tables by hand.
 
   lab/report.py results/stage2_baseline.csv --section stage2 [--readme README.md]
+  lab/report.py results/stage2_delay.csv --section delay --by delay_ms --readme README.md
 
 Input: one row per attempt with at least `natA,natB,success` (success is 0/1). If the time column
 (default `time_to_connect_ms`, see --time-col) exists, a second table with median / p95 of the
@@ -10,6 +11,9 @@ successful attempts is added. Several CSVs may be given; their rows are pooled.
 Output: Markdown. With --readme, it replaces the text between
 `<!-- report:<section>:start -->` and `<!-- report:<section>:end -->` in that file; otherwise it is
 printed to stdout.
+
+With --by COLUMN the table has one row per NAT pair that occurs in the data and one column per
+value of COLUMN (e.g. the extra delay), instead of the NAT A x NAT B grid.
 
 Success rates come with a Wilson 95% score interval, e.g. `87% [79–92]`: unlike the plain
 p ± 1.96·sqrt(p(1-p)/n) interval it stays inside 0–100% and behaves well at 0% and 100%.
@@ -42,19 +46,23 @@ def percentile(sorted_values: list[float], q: float) -> float:
     return sorted_values[rank - 1]
 
 
-def load(paths: list[str], time_col: str):
-    """Returns {(natA, natB): (successes, attempts, [times of successful attempts])}, has_time."""
+def load(paths: list[str], time_col: str, by: str | None = None):
+    """Returns {key: (successes, attempts, [times of successful attempts])}, has_time.
+    key is (natA, natB), or (natA, natB, value of `by`) when `by` is given."""
     cells = defaultdict(lambda: [0, 0, []])
     has_time = False
     for path in paths:
         with open(path, newline="") as f:
             reader = csv.DictReader(f)
             missing = {"natA", "natB", "success"} - set(reader.fieldnames or [])
+            if by:
+                missing |= {by} - set(reader.fieldnames or [])
             if missing:
                 sys.exit(f"{path}: missing column(s) {', '.join(sorted(missing))}")
             has_time |= time_col in reader.fieldnames
             for row in reader:
-                cell = cells[(row["natA"], row["natB"])]
+                key = (row["natA"], row["natB"]) + ((row[by],) if by else ())
+                cell = cells[key]
                 cell[1] += 1
                 if row["success"].strip() == "1":
                     cell[0] += 1
@@ -73,6 +81,24 @@ def table(cells, fmt) -> str:
     return "\n".join(lines)
 
 
+def pivot_table(cells, by: str, fmt) -> str:
+    """Rows: NAT pairs in the data (in NAT_TYPES order). Columns: values of `by`, numerically."""
+    def num(v):
+        try:
+            return (0, float(v))
+        except ValueError:
+            return (1, v)
+    values = sorted({k[2] for k in cells}, key=num)
+    order = {t: i for i, t in enumerate(NAT_TYPES)}
+    pairs = sorted({k[:2] for k in cells}, key=lambda p: (order.get(p[0], 99), order.get(p[1], 99)))
+    lines = ["| NAT A × NAT B | " + " | ".join(f"{by} = {v}" for v in values) + " |",
+             "|---|" + "---|" * len(values)]
+    for a, b in pairs:
+        row = [fmt(cells[(a, b, v)]) if (a, b, v) in cells else "—" for v in values]
+        lines.append(f"| {a} × {b} | " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
 def fmt_rate(cell) -> str:
     k, n, _ = cell
     lo, hi = wilson(k, n)
@@ -86,14 +112,14 @@ def fmt_time(cell) -> str:
     return f"{percentile(times, 50):.0f} / {percentile(times, 95):.0f}"
 
 
-def render(cells, has_time: bool, time_label: str) -> str:
+def render(cells, has_time: bool, time_label: str, by: str | None = None) -> str:
     counts = sorted({c[1] for c in cells.values()})
     n_text = str(counts[0]) if len(counts) == 1 else f"{counts[0]}–{counts[-1]}"
-    parts = [f"Success rate [Wilson 95% CI], n = {n_text} attempts per cell.", "",
-             table(cells, fmt_rate)]
+    grid = (lambda fmt: pivot_table(cells, by, fmt)) if by else (lambda fmt: table(cells, fmt))
+    parts = [f"Success rate [Wilson 95% CI], n = {n_text} attempts per cell.", "", grid(fmt_rate)]
     if has_time:
         parts += ["", f"{time_label}, median / p95 in ms (successful attempts only).", "",
-                  table(cells, fmt_time)]
+                  grid(fmt_time)]
     return "\n".join(parts)
 
 
@@ -112,12 +138,13 @@ def main() -> None:
     ap.add_argument("--readme")
     ap.add_argument("--time-col", default="time_to_connect_ms")
     ap.add_argument("--time-label", default="Time to connect")
+    ap.add_argument("--by", help="pivot on this column instead of the NAT A x NAT B grid")
     args = ap.parse_args()
 
-    cells, has_time = load(args.csv, args.time_col)
+    cells, has_time = load(args.csv, args.time_col, args.by)
     if not cells:
         sys.exit("no rows")
-    body = render(cells, has_time, args.time_label)
+    body = render(cells, has_time, args.time_label, args.by)
     if args.readme:
         with open(args.readme) as f:
             text = f.read()

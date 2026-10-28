@@ -141,6 +141,12 @@ table ip filter {
     flags dynamic, timeout
     timeout 120s
   }
+  # Unsolicited UDP to the router's own WAN address (nothing listens there) must be dropped here.
+  # Otherwise the kernel delivers it locally, answers with ICMP port unreachable, and confirms a
+  # conntrack entry for (remote -> our public ip:port). If the LAN host then sends to that remote,
+  # masquerade sees the clash and picks a different public port: an early probe from the peer
+  # would silently turn this endpoint-independent NAT into an endpoint-dependent one.
+  chain input { type filter hook input priority 0; iifname "$wan" meta l4proto udp ct state new drop; }
   chain forward {
     type filter hook forward priority 0; policy drop;
     iifname "$lan" oifname "$wan" ip protocol udp update @contacted { ip saddr . udp sport . ip daddr }

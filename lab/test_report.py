@@ -57,6 +57,19 @@ class EndToEnd(unittest.TestCase):
         out = report.splice(readme, "x", "new")
         self.assertEqual(out, "a\n<!-- report:x:start -->\nnew\n<!-- report:x:end -->\nb\n")
 
+    def test_pivot_by_column(self):
+        rows = ["natA,natB,delay_ms,attempt,success,time_to_connect_ms,probes_sent,path"]
+        for d in ("200", "0", "50"):
+            rows += [f"full,full,{d},{i},1,{10 + i},4,direct" for i in range(1, 11)]
+        rows += [f"port-restricted,symmetric-random,0,{i},0,,150,none" for i in range(1, 11)]
+        cells, has_time = report.load([self.write("\n".join(rows) + "\n")],
+                                      "time_to_connect_ms", by="delay_ms")
+        body = report.render(cells, has_time, "Time to connect", by="delay_ms")
+        # Columns sorted numerically (0, 50, 200), not as text.
+        self.assertIn("| NAT A × NAT B | delay_ms = 0 | delay_ms = 50 | delay_ms = 200 |", body)
+        self.assertIn("| full × full | 100% [72–100] | 100% [72–100] | 100% [72–100] |", body)
+        self.assertIn("| port-restricted × symmetric-random | 0% [0–28] | — | — |", body)
+
 
 if __name__ == "__main__":
     unittest.main()
