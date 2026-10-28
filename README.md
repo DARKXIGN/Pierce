@@ -27,11 +27,11 @@ Detection time, median / p95 in ms (successful attempts only).
 
 | NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
 |---|---|---|---|---|---|
-| full | 0 / 0 | 199 / 200 | 398 / 412 | 0 / 0 | 0 / 0 |
-| restricted | 199 / 201 | 199 / 201 | 398 / 401 | 199 / 200 | 199 / 201 |
-| port-restricted | 398 / 403 | 398 / 413 | 398 / 402 | 398 / 401 | 398 / 407 |
-| symmetric-random | 0 / 0 | 199 / 203 | 398 / 403 | 0 / 0 | 0 / 0 |
-| symmetric-sequential | 0 / 0 | 199 / 203 | 398 / 401 | 0 / 0 | 0 / 0 |
+| full | 0 / 0 | 198 / 198 | 397 / 397 | 0 / 0 | 0 / 0 |
+| restricted | 198 / 198 | 198 / 198 | 397 / 397 | 198 / 198 | 198 / 198 |
+| port-restricted | 397 / 397 | 397 / 397 | 397 / 397 | 397 / 397 | 397 / 397 |
+| symmetric-random | 0 / 0 | 198 / 198 | 397 / 397 | 0 / 0 | 0 / 0 |
+| symmetric-sequential | 0 / 0 | 198 / 198 | 397 / 397 | 0 / 0 | 0 / 0 |
 <!-- report:stage1:end -->
 
 ### Stage 2+: direct connection success rate
