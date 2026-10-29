@@ -139,6 +139,24 @@ A connection that started on the relay retries the direct path in the background
 | symmetric-random × port-restricted | 6 | 100% [61–100] | 5192 / 10034 |
 <!-- report:upgrade:end -->
 
+### Stage 4: traffic through the tunnel (lab)
+
+Real IP traffic between TUN devices (peerA 10.99.0.1, peerB 10.99.0.2) through WireGuard (BoringTun) over the path the agents found, measured from peerA: 50 pings and a 5 s iperf3 TCP transfer per run. The lab's links have no delay, so ping shows the cost of the tunnel itself. The `symmetric-sequential` pair is limited by the userspace NAT, which copies every packet through user space; that is not WireGuard's limit.
+
+On every relayed run, tcpdump checks the relay hop: the pings carry a marker that is visible on peerA's TUN device and never in the packets to or from the relay. The last relayed capture is kept as `results/stage4_relay_hop.pcap` (not committed: `*.pcap` is git-ignored).
+
+<!-- report:stage4:start -->
+| NAT A × NAT B | path | runs | ping, median ms | loss, worst | iperf3, median / min Mbit/s |
+|---|---|---|---|---|---|
+| port-restricted × port-restricted | direct | 5 | 0.56 | 0% | 813 / 724 |
+| symmetric-random × port-restricted | direct | 3 | 0.54 | 0% | 760 / 741 |
+| symmetric-random × port-restricted | relay | 2 | 0.71 | 0% | 651 / 651 |
+| symmetric-random × symmetric-random | relay | 5 | 0.83 | 0% | 741 / 598 |
+| symmetric-sequential × symmetric-sequential | direct | 5 | 0.92 | 0% | 330 / 313 |
+<!-- report:stage4:end -->
+
+Real networks (home ↔ OCI, hotspot ↔ OCI, home ↔ hotspot) and NAT mapping lifetimes are not measured yet.
+
 ## Build
 
 ```sh
@@ -151,8 +169,11 @@ On Ubuntu 24.04 you can skip vcpkg and use the distro packages, then `cmake -B b
 
 ```sh
 sudo apt install cmake g++ libgtest-dev libssl-dev libsqlite3-dev \
-  libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc iproute2
+  libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc iproute2 iperf3 tcpdump
+curl --proto '=https' -sSf https://sh.rustup.rs | sh   # Rust, to build BoringTun (stage 4)
 ```
+
+Without Rust everything builds except the WireGuard data plane (CMake prints a warning). CI (`.github/workflows/ci.yml`) builds, runs the unit tests and a reduced lab matrix on every push.
 
 ## NAT lab (Linux, root)
 
@@ -176,6 +197,11 @@ sudo ./lab/run_stage2.sh upgrade            # relay -> direct upgrades -> result
 sudo ./lab/check_coord_outage.sh symmetric-random symmetric-random   # relayed path survives too
 python3 lab/report.py results/stage3_improved.csv --section stage3 --readme README.md
 python3 lab/report.py results/stage3_upgrade.csv --upgrade --section upgrade --readme README.md
+
+sudo ./lab/run_stage4.sh                    # traffic through the tunnel -> results/stage4_lab.csv
+python3 lab/report.py results/stage4_lab.csv --stage4 --section stage4 --readme README.md
+
+sudo ./lab/ci.sh                            # the CI regression run: 10 attempts per combination
 ```
 
 ## STUN and NAT type detection
@@ -211,6 +237,18 @@ build/pierce-coord --listen 203.0.113.10:50051 --relay 203.0.113.10:3480 --relay
 ```
 
 The relay forwards packets between the two endpoints that bound with the same token. A token is `session id | expiry | HMAC(secret)`, issued by the coordination server and checked by the relay alone, so a relayed connection keeps working while the coordination server is down until the token expires (600 s by default). Relay control packets start with `0xFE` (BIND, BOUND, PING, PONG); everything else is forwarded unchanged, so the relay only ever sees WireGuard ciphertext and probes.
+
+## Data plane (stage 4)
+
+```sh
+build/pierce-wgkey genkey > a.key; build/pierce-wgkey pubkey < a.key > a.pub   # likewise for B
+sudo ip tuntap add dev pierce0 mode tun; sudo ip addr add 10.99.0.1/24 dev pierce0
+sudo ip link set pierce0 mtu 1420 up
+sudo build/pierce-agent --coord ... --stun ... --id A --peer B \
+  --tun pierce0 --wg-key "$(cat a.key)" --wg-peer "$(cat b.pub)" --hold 0
+```
+
+After connecting, the agent moves packets between the TUN device and BoringTun, and BoringTun's datagrams go out on the socket and path the connection was made on: the main socket, a birthday socket, or the main socket via the relay. On that socket the first byte tells WireGuard (1–4) and probes (0xFF) apart. Peer public keys are exchanged in advance (here as files), never through the coordination server, so a compromised coordinator cannot slip in a fake peer: the WireGuard handshake would fail.
 
 ## Documentation
 

@@ -59,6 +59,13 @@ nftables cannot hand out public ports in sequence, so `symmetric-sequential` is 
 - `run_stage2.sh upgrade` holds connections for `UPGRADE_HOLD` (16) seconds with a direct retry every `UPGRADE_RETRY_MS` (5000) for `UPGRADE_PAIRS` → `results/stage3_upgrade.csv` (`natA,natB,attempt,initial_path,upgrade_ms`).
 - `check_coord_outage.sh [natA] [natB]` connects two peers, kills the coordination and STUN servers (the relay stays up) and checks 10 s of keepalives. With `symmetric-random symmetric-random` the path is relayed.
 
+## Stage 4 runs
+- `run_stage4.sh` adds a persistent TUN device `pierce0` in each peer namespace (10.99.0.1 / 10.99.0.2, MTU 1420), generates WireGuard keys with `pierce-wgkey`, and runs both agents with `--tun`. From peerA it measures 50 pings and a 5 s iperf3 transfer per run → `results/stage4_lab.csv` (`natA,natB,run,path,ping_avg_ms,ping_loss_pct,iperf_mbps`). Needs `iperf3` and `tcpdump`.
+- On relayed runs it captures the relay port in `obs` and ICMP on peerA's `pierce0`: the ping marker must be in the second capture and never in the first.
+
+## CI
+`ci.sh` runs `run_matrix.sh` and `run_stage2.sh stage3` with `CI_ATTEMPTS` (10) attempts per combination, plus `check_coord_outage.sh` for a direct and a relayed path. `ci_check.py` then compares the run with the committed results in `results/`: a cell fails if its count is implausibly low (one-sided binomial test, p < 0.01, against the Wilson lower bound of the 100-attempt reference), or if attempts reach neither a direct path nor the relay.
+
 ## Self-check (`check_nat.sh`, `natcheck.py`)
 A small Python UDP tester that proves the lab behaves as configured, independent of Pierce's own C++ STUN code (so the detector is not validated against itself). A server in `obs` listens on `.10:3478`, `.10:3479` and `.11:3478`; the client in a peer namespace:
 
