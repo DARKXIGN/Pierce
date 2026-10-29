@@ -95,6 +95,7 @@ Same 5×5 matrix with the stage 3 techniques on. Success is still the **direct**
 - **Birthday probing** (`symmetric-random` vs a cone NAT): the random side probes from 256 extra sockets, the cone side guesses 256 ports on the peer's IP; expected hit rate 1 − e^(−256·256/64512) ≈ 64%.
 - **Relay**: after 3 s the agents bind to the relay the coordination server picked (lowest RTT_A + RTT_B) with a shared token and probe through it.
 - **Triggered checks** on every incoming request (also a change to the stage 2 code path).
+- **Port mapping** (separate table below): PCP (own implementation), NAT-PMP (libnatpmp), UPnP IGD (miniupnpc).
 
 <!-- report:stage3:start -->
 Success rate [Wilson 95% CI], n = 100 attempts per cell.
@@ -127,6 +128,48 @@ Relay usage: attempts that fell back to the relay [Wilson 95% CI].
 | symmetric-random | 0% [0–4] | 0% [0–4] | 37% [28–47] | 100% [96–100] | 100% [96–100] |
 | symmetric-sequential | 0% [0–4] | 0% [0–4] | 0% [0–4] | 100% [96–100] | 0% [0–4] |
 <!-- report:stage3:end -->
+
+#### Port mapping (UPnP / NAT-PMP / PCP)
+
+The same matrix with NAT A's router also answering port mapping requests (miniupnpd, the daemon many home routers run). The agent asks it to open its socket's port, trying PCP, NAT-PMP and UPnP in that order, and offers the mapped port as a candidate. A mapped port takes packets from anyone, so even a symmetric NAT on side A stops mattering. Rows `<type>+portmap` use whichever protocol answers first (PCP); the last three rows use one protocol each. `symmetric-sequential` has no row: the userspace NAT does not do port mapping.
+
+<!-- report:portmap:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | — | — | — | — | — |
+| restricted | — | — | — | — | — |
+| port-restricted | — | — | — | — | — |
+| symmetric-random | — | — | — | — | — |
+| symmetric-sequential | — | — | — | — | — |
+| full+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+pcp | — | — | — | 100% [96–100] | — |
+| symmetric-random+natpmp | — | — | — | 100% [96–100] | — |
+| symmetric-random+upnp | — | — | — | 100% [96–100] | — |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | — | — | — | — | — |
+| restricted | — | — | — | — | — |
+| port-restricted | — | — | — | — | — |
+| symmetric-random | — | — | — | — | — |
+| symmetric-sequential | — | — | — | — | — |
+| full+portmap | 65 / 74 | 64 / 73 | 63 / 70 | 49 / 63 | 64 / 75 |
+| restricted+portmap | 63 / 72 | 63 / 72 | 63 / 74 | 46 / 62 | 64 / 73 |
+| port-restricted+portmap | 62 / 70 | 61 / 68 | 62 / 71 | 47 / 60 | 63 / 68 |
+| symmetric-random+portmap | 79 / 102 | 75 / 99 | 81 / 104 | 62 / 69 | 63 / 75 |
+| symmetric-random+pcp | — | — | — | 61 / 69 | — |
+| symmetric-random+natpmp | — | — | — | 65 / 72 | — |
+| symmetric-random+upnp | — | — | — | 130 / 143 | — |
+<!-- report:portmap:end -->
+
+When no router answers, the probes fail at once with ICMP port unreachable; a router that silently drops them costs up to 500 ms before signaling goes on without a mapping.
 
 #### Relay → direct upgrade
 
@@ -171,7 +214,8 @@ On Ubuntu 24.04 you can skip vcpkg and use the distro packages, then `cmake -B b
 
 ```sh
 sudo apt install cmake g++ libgtest-dev libssl-dev libsqlite3-dev \
-  libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc iproute2 iperf3 tcpdump
+  libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc iproute2 iperf3 tcpdump \
+  libnatpmp-dev libminiupnpc-dev
 curl --proto '=https' -sSf https://sh.rustup.rs | sh   # Rust, to build BoringTun (stage 4)
 ```
 
@@ -196,9 +240,12 @@ python3 lab/report.py results/stage2_delay.csv --section delay --by delay_ms --r
 
 sudo ./lab/run_stage2.sh stage3             # stage 3 techniques + relay -> results/stage3_improved.csv
 sudo ./lab/run_stage2.sh upgrade            # relay -> direct upgrades -> results/stage3_upgrade.csv
+./lab/get_miniupnpd.sh                      # once: unpack miniupnpd for the lab (not installed)
+sudo ./lab/run_stage2.sh portmap            # router A does port mapping -> results/stage3_portmap.csv
 sudo ./lab/check_coord_outage.sh symmetric-random symmetric-random   # relayed path survives too
 python3 lab/report.py results/stage3_improved.csv --section stage3 --readme README.md
 python3 lab/report.py results/stage3_upgrade.csv --upgrade --section upgrade --readme README.md
+python3 lab/report.py results/stage3_portmap.csv --section portmap --readme README.md
 
 sudo ./lab/run_stage4.sh                    # traffic through the tunnel -> results/stage4_lab.csv
 python3 lab/report.py results/stage4_lab.csv --stage4 --section stage4 --readme README.md
