@@ -144,7 +144,7 @@ for pair in ${UDP_BLOCKED_PAIRS-port-restricted:port-restricted}; do
     "$here/teardown.sh" >/dev/null 2>&1
     "$here/setup.sh" "$a" "$b" >/dev/null 2>&1 || { echo "setup failed: $a $b" >&2; continue; }
     # peerA's network lets no UDP through at all, in either direction.
-    ns_exec "$NS_NAT_A" nft insert rule ip filter forward meta l4proto udp drop
+    ns_exec "$NS_NAT_A" nft insert rule inet filter forward meta l4proto udp drop
     tun_up "$NS_PEER_A" 10.99.0.1
     tun_up "$NS_PEER_B" 10.99.0.2
     start_servers

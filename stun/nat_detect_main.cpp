@@ -1,6 +1,6 @@
 // nat_detect: classify the NAT in front of this host.
 //
-//   nat_detect --server 203.0.113.10:3478 --alt-ip 203.0.113.11 [--alt-port 3479]
+//   nat_detect --server 192.0.32.10:3478 --alt-ip 192.0.32.11 [--alt-port 3479]
 //              [--timeout-ms 200] [--tries 3] [--repeat N]
 //
 // Prints one line per run: "<type>,<milliseconds>", e.g. "symmetric-sequential,3".

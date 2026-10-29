@@ -12,7 +12,7 @@
 // Errors (bind failing, etc.) throw std::system_error.
 namespace stun {
 
-std::optional<Endpoint> parse_endpoint(std::string_view text);  // "203.0.113.10:3478"
+std::optional<Endpoint> parse_endpoint(std::string_view text);  // "192.0.32.10:3478"
 std::optional<std::array<std::uint8_t, 4>> parse_ipv4(std::string_view text);
 std::string to_string(const Endpoint& ep);
 

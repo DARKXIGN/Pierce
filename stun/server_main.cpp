@@ -1,6 +1,6 @@
 // stun_server: Binding-only STUN server with CHANGE-REQUEST support.
 //
-//   stun_server --ip 203.0.113.10 [--alt-ip 203.0.113.11] [--port 3478] [--alt-port 3479] [-v]
+//   stun_server --ip 192.0.32.10 [--alt-ip 192.0.32.11] [--port 3478] [--alt-port 3479] [-v]
 //
 // Listens on every (ip, port) combination. A response normally leaves from the socket the request
 // arrived on; CHANGE-REQUEST makes it leave from the other IP and/or the other port instead, which

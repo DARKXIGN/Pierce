@@ -58,6 +58,15 @@ class EndToEnd(unittest.TestCase):
         out = report.splice(readme, "x", "new")
         self.assertEqual(out, "a\n<!-- report:x:start -->\nnew\n<!-- report:x:end -->\nb\n")
 
+    def test_extra_row_labels(self):
+        rows = ["natA,natB,attempt,success,time_to_connect_ms,probes_sent,path",
+                "full+portmap,full,1,1,40,4,direct", "symmetric-random+pcp,symmetric-random,1,1,50,4,direct"]
+        body = report.render(*report.load([self.write("\n".join(rows) + "\n")],
+                                          "time_to_connect_ms"), "Time to connect")
+        self.assertIn("| full+portmap | 100% [21–100] | — | — | — | — |", body)
+        self.assertIn("| symmetric-random+pcp | — | — | — | 100% [21–100] | — |", body)
+        self.assertLess(body.index("full+portmap"), body.index("symmetric-random+pcp"))
+
     def test_relay_table_only_when_relayed(self):
         rows = ["natA,natB,attempt,success,time_to_connect_ms,probes_sent,path"]
         rows += [f"full,full,{i},1,40,4,direct" for i in range(1, 11)]

@@ -1,7 +1,7 @@
 // pierce-relay: UDP relay for peers that cannot connect directly.
 //
-//   pierce-relay --listen 203.0.113.10:3480 --secret HEX [--idle 120] [-v]
-//                [--tls-listen 203.0.113.10:3443 --tls-cert cert.pem --tls-key key.pem]
+//   pierce-relay --listen 192.0.32.10:3480 --secret HEX [--idle 120] [-v]
+//                [--tls-listen 192.0.32.10:3443 --tls-cert cert.pem --tls-key key.pem]
 //
 // With --tls-listen it also accepts agents over TCP/TLS (for networks that block UDP); they speak
 // the same protocol, one datagram per length-prefixed frame (relay/framing.hpp).

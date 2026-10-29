@@ -13,6 +13,7 @@ std::string_view to_string(CandidateType t) {
   switch (t) {
     case CandidateType::Host: return "host";
     case CandidateType::ServerReflexive: return "srflx";
+    case CandidateType::PortMapped: return "portmap";
     case CandidateType::PeerReflexive: return "prflx";
     case CandidateType::Predicted: return "predicted";
     case CandidateType::Relayed: return "relay";
@@ -26,6 +27,7 @@ std::uint32_t priority(CandidateType t, std::uint16_t local_preference) {
     case CandidateType::Host: type_pref = 126; break;
     case CandidateType::PeerReflexive: type_pref = 110; break;
     case CandidateType::ServerReflexive: type_pref = 100; break;
+    case CandidateType::PortMapped: type_pref = 105; break;
     case CandidateType::Predicted: type_pref = 50; break;
     case CandidateType::Relayed: type_pref = 0; break;
   }

@@ -5,11 +5,16 @@
 #   sudo ./lab/run_stage2.sh delay    [results_dir]   # extra delay on one side -> stage2_delay.csv
 #   sudo ./lab/run_stage2.sh stage3   [results_dir]   # with stage 3 techniques -> stage3_improved.csv
 #   sudo ./lab/run_stage2.sh upgrade  [results_dir]   # relay -> direct upgrades -> stage3_upgrade.csv
+#   sudo ./lab/run_stage2.sh portmap  [results_dir]   # router A does port mapping -> stage3_portmap.csv
 #
 # baseline and delay run plain stage 2 hole punching. stage3 runs the same 5×5 matrix with the
 # stage 3 techniques switched on: NAT mapping characterization, port prediction, birthday
 # probing, and the relay fallback after the 3 s direct attempt (two relays in obs; the
 # coordination server picks the one with the lowest RTT_A + RTT_B).
+# portmap is stage3 with natA also running miniupnpd (UPnP IGD / NAT-PMP / PCP; needs
+# ./lab/get_miniupnpd.sh): rows "<type>+portmap" for every nftables NAT type (the userspace NAT
+# has no port mapping), then one row per protocol on its own, "symmetric-random+pcp" etc., against
+# symmetric-random.
 # upgrade holds each connection for UPGRADE_HOLD seconds (default 16) and lets a relayed
 # connection retry the direct path every UPGRADE_RETRY_MS (default 5000; 30000 in production,
 # shortened so the experiment fits in minutes), recording how long until it upgraded.
@@ -84,9 +89,10 @@ attempt() {
   rm -f "$ra" "$rb"
 }
 
-# run_combo <a> <b> <prefix-template>: fresh lab, then $attempts attempts.
+# run_combo <a> <b> [delay]: fresh lab, then $attempts attempts. NAT A is written to the CSV as
+# $label_a when that is set (e.g. "full+portmap").
 run_combo() {
-  local a=$1 b=$2 delay=${3:-}
+  local a=$1 b=$2 delay=${3:-} la=${label_a:-$1}
   "$here/teardown.sh" >/dev/null 2>&1
   if ! "$here/setup.sh" "$a" "$b" >/dev/null 2>&1; then
     printf '%-21s %-21s SETUP FAILED\n' "$a" "$b"; return
@@ -98,15 +104,15 @@ run_combo() {
   start_servers
   local i
   for ((i = 1; i <= attempts; i++)); do
-    if [[ -n $delay ]]; then attempt "$a,$b,$delay,$i"; else attempt "$a,$b,$i"; fi
+    if [[ -n $delay ]]; then attempt "$la,$b,$delay,$i"; else attempt "$la,$b,$i"; fi
   done
   stop_servers
   local ok relayed
-  ok=$(awk -F, -v a="$a" -v b="$b" -v d="$delay" \
+  ok=$(awk -F, -v a="$la" -v b="$b" -v d="$delay" \
     '$1==a && $2==b && (d=="" || $3==d) && $(NF-3)==1' "$out" | wc -l)
-  relayed=$(awk -F, -v a="$a" -v b="$b" -v d="$delay" \
+  relayed=$(awk -F, -v a="$la" -v b="$b" -v d="$delay" \
     '$1==a && $2==b && (d=="" || $3==d) && $NF ~ /^relay/' "$out" | wc -l)
-  printf '%-21s %-21s %s%s/%s direct%s\n' "$a" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts" \
+  printf '%-28s %-21s %s%s/%s direct%s\n' "$la" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts" \
     "$([[ $use_relays == 1 ]] && echo ", $relayed relay")"
 }
 
@@ -131,7 +137,24 @@ upgrade_attempt() {
 
 agent_extra=()
 use_relays=0
+label_a=""
 case $mode in
+  portmap)
+    [[ -x $build/miniupnpd/usr/sbin/miniupnpd ]] || { echo "run ./lab/get_miniupnpd.sh first" >&2; exit 1; }
+    use_relays=1
+    out=$results/stage3_portmap.csv
+    echo "natA,natB,attempt,success,time_to_connect_ms,probes_sent,path" > "$out"
+    export PORTMAP=A
+    for a in full restricted port-restricted symmetric-random; do
+      agent_extra=(--stun-alt-ip "$OBS_IP2" --stun-alt-port 3479)
+      label_a="$a+portmap"
+      for b in "${NAT_TYPES[@]}"; do run_combo "$a" "$b"; done
+    done
+    for proto in pcp natpmp upnp; do
+      agent_extra=(--stun-alt-ip "$OBS_IP2" --stun-alt-port 3479 --portmap "$proto")
+      label_a="symmetric-random+$proto"
+      run_combo symmetric-random symmetric-random
+    done ;;
   upgrade)
     agent_extra=(--stun-alt-ip "$OBS_IP2" --stun-alt-port 3479)
     use_relays=1

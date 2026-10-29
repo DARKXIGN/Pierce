@@ -1,6 +1,6 @@
 // usernat: the symmetric-sequential NAT for the lab. Runs inside a NAT router namespace.
 //
-//   usernat --lan nA-lan --wan nA-wan --public-ip 203.0.113.1 [--lifetime 120]
+//   usernat --lan nA-lan --wan nA-wan --public-ip 192.0.32.1 [--lifetime 120]
 //           [--port-min 20000] [--port-max 60999] [--step 1] [-v]
 //
 // How it moves packets (setup.sh sets up the nftables side):
@@ -11,6 +11,7 @@
 //   - We rewrite the addresses and send the result with a raw IP socket, which lets us choose any
 //     source address (the remote peer's IP when delivering to the LAN host).
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <net/if.h>
@@ -19,6 +20,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdio>
@@ -26,6 +28,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "lab/usernat/nat_table.hpp"
 #include "lab/usernat/packet.hpp"
@@ -102,6 +105,19 @@ int open_packet_socket(const std::string& ifname) {
   return fd;
 }
 
+// The IPv4 addresses of one interface (host byte order): packets to these are for the router
+// itself (e.g. a PCP or NAT-PMP request to the gateway), not for NAT.
+std::vector<std::uint32_t> addresses_of(const std::string& ifname) {
+  std::vector<std::uint32_t> out;
+  ifaddrs* list = nullptr;
+  if (getifaddrs(&list) != 0) return out;
+  for (auto* ifa = list; ifa; ifa = ifa->ifa_next)
+    if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET && ifname == ifa->ifa_name)
+      out.push_back(ntohl(reinterpret_cast<sockaddr_in*>(ifa->ifa_addr)->sin_addr.s_addr));
+  freeifaddrs(list);
+  return out;
+}
+
 std::string str(Endpoint e) {
   char buf[32];
   std::snprintf(buf, sizeof buf, "%u.%u.%u.%u:%u", e.ip >> 24, (e.ip >> 16) & 0xFF,
@@ -115,6 +131,7 @@ int main(int argc, char** argv) {
   const Options opt = parse_args(argc, argv);
   usernat::Table table(opt.port_min, opt.port_max, opt.step, std::chrono::seconds(opt.lifetime_s));
 
+  const auto router_lan_ips = addresses_of(opt.lan);
   const int lan_fd = open_packet_socket(opt.lan);
   const int wan_fd = open_packet_socket(opt.wan);
   // IPPROTO_RAW: we write the whole IP header ourselves; the kernel only routes the packet.
@@ -154,6 +171,9 @@ int main(int argc, char** argv) {
       if (!udp) continue;
 
       if (p.fd == lan_fd) {
+        // Addressed to the router itself: not ours to NAT, and it must not use up a public port.
+        if (std::find(router_lan_ips.begin(), router_lan_ips.end(), udp->dst.ip) != router_lan_ips.end())
+          continue;
         const auto port = table.outbound(udp->src, udp->dst, now);
         if (!port) {
           std::fputs("no free public port, dropping\n", stderr);

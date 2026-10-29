@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Black-box NAT behavior check for the lab, independent of Pierce's own C++ STUN code.
 
-  server: runs in the obs namespace on 203.0.113.10:3478, 203.0.113.10:3479, 203.0.113.11:3478
+  server: runs in the obs namespace on 192.0.32.10:3478, 192.0.32.10:3479, 192.0.32.11:3478
   client: runs in a peer namespace and classifies its NAT as
           full | restricted | port-restricted | symmetric-random | symmetric-sequential
 
@@ -19,7 +19,7 @@ import os
 import socket
 import sys
 
-IP1, IP2 = "203.0.113.10", "203.0.113.11"
+IP1, IP2 = "192.0.32.10", "192.0.32.11"
 MAIN, ALT = 3478, 3479
 
 

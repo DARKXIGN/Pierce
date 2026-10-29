@@ -1,8 +1,9 @@
 // pierce-agent: one direct-connection attempt to a peer (stage 2: probes only, no data plane yet).
 //
-//   pierce-agent --coord 203.0.113.10:50051 --stun 203.0.113.10:3478 --id A --peer B
-//                [--stun-alt-ip 203.0.113.11] [--stun-alt-port 3479] [--predict-window 32]
+//   pierce-agent --coord 192.0.32.10:50051 --stun 192.0.32.10:3478 --id A --peer B
+//                [--stun-alt-ip 192.0.32.11] [--stun-alt-port 3479] [--predict-window 32]
 //                [--birthday 256] [--retry-direct-ms 30000]
+//                [--portmap auto|pcp|natpmp|upnp|off]
 //                [--tun pierce0 --wg-key PRIVATE --wg-peer PUBLIC]
 //                [--timeout-ms 3000] [--signal-timeout-ms 5000] [--interval-ms 20]
 //                [--hold SEC] [--keepalive-ms 25000]
@@ -14,8 +15,8 @@
 // side probes from --birthday extra sockets, the cone side guesses as many ports (0 = off).
 //
 // Prints one line to stdout:  direct,time_to_connect_ms,probes_sent,path,remote
-//   1,142,7,direct,203.0.113.2:41000     connected directly
-//   0,3071,160,relay,203.0.113.10:3480   direct failed, connected through the relay
+//   1,142,7,direct,192.0.32.2:41000     connected directly
+//   0,3071,160,relay,192.0.32.10:3480   direct failed, connected through the relay
 //   0,4210,180,relay-tls,127.0.0.1:41000 same, over TCP/TLS (UDP to the relay got no answer)
 //   0,,150,none,                         neither
 // time_to_connect_ms runs from sending Register (start of signaling) to the first authenticated
@@ -24,6 +25,8 @@
 // While relayed and holding (--hold), it asks for a new direct attempt every --retry-direct-ms
 // (0 = never) and reports "upgrade_ms=N" on stderr if one succeeds (time since the relay
 // connected).
+// --portmap (default auto) asks the router to open the socket's port, trying PCP, NAT-PMP and
+// UPnP in that order (or only the one named); a mapped port becomes a "portmap" candidate.
 // With --tun (stage 4) the agent runs the WireGuard data plane after connecting instead of probe
 // keepalives: TUN device <-> BoringTun <-> the socket and path the connection was made on, for
 // --hold seconds (0 = until killed). Keys are base64 (pierce-wgkey genkey / pubkey); the peer's
@@ -33,6 +36,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <future>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -42,6 +46,7 @@
 #include <thread>
 
 #include "agent/candidates.hpp"
+#include "agent/portmap.hpp"
 #include "agent/predict.hpp"
 #include "agent/punch.hpp"
 #include "agent/relay_client.hpp"
@@ -67,14 +72,17 @@ namespace pb = pierce::coord;
       "usage: pierce-agent --coord HOST:PORT --stun IP:PORT --id ID --peer ID [--stun-alt-ip IP]\n"
       "                    [--stun-alt-port N] [--predict-window N] [--birthday N] [--timeout-ms N]\n"
       "                    [--signal-timeout-ms N] [--interval-ms N] [--hold SEC] [--keepalive-ms N]\n"
-      "                    [--retry-direct-ms N] [--tun NAME --wg-key PRIVATE --wg-peer PUBLIC]\n",
+      "                    [--retry-direct-ms N] [--portmap auto|pcp|natpmp|upnp|off]\n"
+      "                    [--tun NAME --wg-key PRIVATE --wg-peer PUBLIC]\n",
       stderr);
   std::exit(2);
 }
 
 pb::Candidate to_proto(const Candidate& c) {
   pb::Candidate p;
-  p.set_type(c.type == CandidateType::ServerReflexive ? pb::Candidate::SRFLX : pb::Candidate::HOST);
+  p.set_type(c.type == CandidateType::ServerReflexive ? pb::Candidate::SRFLX
+             : c.type == CandidateType::PortMapped    ? pb::Candidate::PORTMAPPED
+                                                      : pb::Candidate::HOST);
   p.set_ipv4(std::string(c.ep.ipv4.begin(), c.ep.ipv4.end()));
   p.set_port(c.ep.port);
   p.set_priority(c.priority);
@@ -110,7 +118,9 @@ agent::NatInfo from_proto(const pb::NatInfo& p) {
 std::optional<Candidate> from_proto(const pb::Candidate& p) {
   if (p.ipv4().size() != 4 || p.port() == 0 || p.port() > 65535) return std::nullopt;
   Candidate c;
-  c.type = p.type() == pb::Candidate::SRFLX ? CandidateType::ServerReflexive : CandidateType::Host;
+  c.type = p.type() == pb::Candidate::SRFLX        ? CandidateType::ServerReflexive
+           : p.type() == pb::Candidate::PORTMAPPED ? CandidateType::PortMapped
+                                                   : CandidateType::Host;
   std::copy(p.ipv4().begin(), p.ipv4().end(), c.ep.ipv4.begin());
   c.ep.port = static_cast<std::uint16_t>(p.port());
   c.priority = p.priority();
@@ -158,6 +168,7 @@ int main(int argc, char** argv) try {
   auto keepalive = std::chrono::milliseconds(25000);
   auto retry_direct = std::chrono::milliseconds(30000);
   std::string tun_name, wg_key, wg_peer;
+  auto portmap_order = *agent::parse_portmap("auto");
   for (int i = 1; i < argc; ++i) {
     std::string_view a = argv[i];
     auto value = [&] {
@@ -179,7 +190,11 @@ int main(int argc, char** argv) try {
     else if (a == "--hold") hold_s = std::atoi(value().c_str());
     else if (a == "--keepalive-ms") keepalive = ms();
     else if (a == "--retry-direct-ms") retry_direct = ms();
-    else if (a == "--tun") tun_name = value();
+    else if (a == "--portmap") {
+      auto o = agent::parse_portmap(value());
+      if (!o) usage();
+      portmap_order = *o;
+    } else if (a == "--tun") tun_name = value();
     else if (a == "--wg-key") wg_key = value();
     else if (a == "--wg-peer") wg_peer = value();
     else usage();
@@ -214,11 +229,32 @@ int main(int argc, char** argv) try {
   stun::UdpSocket sock;
   std::vector<Candidate> mine;
   agent::NatInfo my_nat;
+
+  // Ask the router to open our socket's port (UPnP / NAT-PMP / PCP), in the background while we
+  // reach the coordination server. Requests go to the gateway itself, so they use up no NAT
+  // ports (which would throw off port prediction). Removed again when the agent exits.
+  auto portmap_future = std::async(std::launch::async, [&, port = sock.local_endpoint().port] {
+    return agent::PortMapping::create(port, portmap_order, std::chrono::milliseconds(500));
+  });
+  std::optional<agent::PortMapping> portmap;
+  bool portmap_done = false;
   // Gather host and server-reflexive candidates and characterize the NAT's mapping. Run again
   // before each retry of the direct path, because the NAT's mappings may have changed since.
   auto gather = [&] {
     mine = agent::host_candidates(sock.local_endpoint().port, tun_name);
     my_nat = {};
+    if (!portmap_done) {
+      // emplace (construct in place): PortMapping can be moved but not move-assigned.
+      if (auto pm = portmap_future.get()) portmap.emplace(std::move(*pm));
+      portmap_done = true;
+      if (portmap)
+        std::fprintf(stderr, "pierce-agent: port mapped by %s: %s\n",
+                     std::string(agent::to_string(portmap->protocol())).c_str(),
+                     stun::to_string(portmap->external()).c_str());
+    }
+    if (portmap)
+      mine.push_back({CandidateType::PortMapped, portmap->external(),
+                      agent::priority(CandidateType::PortMapped)});
     auto ask = [&](const stun::Endpoint& to) -> std::optional<stun::Endpoint> {
       if (auto r = stun::binding(sock, to, 0, std::chrono::milliseconds(200), 3)) return r->xor_mapped;
       return std::nullopt;

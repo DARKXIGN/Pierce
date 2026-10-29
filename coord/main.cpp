@@ -1,6 +1,6 @@
 // pierce-coord: the coordination server.
 //
-//   pierce-coord --listen 203.0.113.10:50051 [--db nodes.sqlite] [--margin-ms 20] [-v]
+//   pierce-coord --listen 192.0.32.10:50051 [--db nodes.sqlite] [--margin-ms 20] [-v]
 //                [--relay IP:PORT ... --relay-secret HEX [--relay-token-ttl SEC]
 //                 [--relay-tls-port N]]
 //

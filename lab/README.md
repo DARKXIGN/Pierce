@@ -3,14 +3,14 @@
 Network namespaces create 2 peers, 2 NAT routers, an "internet" bridge and an observer host with two public IPs. Four NAT types are reproduced with nftables, the fifth (`symmetric-sequential`) with a small C++ userspace NAT. Linux and root required; build first (`cmake -B build && cmake --build build`) so `build/usernat` exists.
 
 ```
-peerA 10.0.1.2 -- natA 10.0.1.1 | 203.0.113.1 --+
+peerA 10.0.1.2 -- natA 10.0.1.1 | 192.0.32.1 --+
                                                 |  bridge br0 (netns pierce-inet)
-peerB 10.0.2.2 -- natB 10.0.2.1 | 203.0.113.2 --+
+peerB 10.0.2.2 -- natB 10.0.2.1 | 192.0.32.2 --+
                                                 |
-                 obs 203.0.113.10, 203.0.113.11 +   two "public servers" (STUN later, self-check now)
+                 obs 192.0.32.10, 192.0.32.11 +   two "public servers" (STUN later, self-check now)
 ```
 
-Everything, including the bridge, lives in its own namespace. The host network, Docker and Nginx Proxy Manager are never touched, and `teardown.sh` removes every trace by deleting the namespaces.
+The "internet" is 192.0.32.0/24 rather than a documentation range, because miniupnpd (port mapping, below) refuses reserved external addresses. The namespaces have no route to the real internet, so these addresses are never contacted. Everything, including the bridge, lives in its own namespace. The host network, Docker and Nginx Proxy Manager are never touched, and `teardown.sh` removes every trace by deleting the namespaces.
 
 ## Usage
 ```sh
@@ -55,7 +55,7 @@ nftables cannot hand out public ports in sequence, so `symmetric-sequential` is 
 ## Stage 2 runs
 - `run_stage2.sh baseline` brings the lab up per combination, starts `stun_server` and `pierce-coord` in `obs`, and runs both agents `ATTEMPTS` (100) times. It writes one row per attempt to `results/stage2_baseline.csv`.
 - `run_stage2.sh delay` does the same for `DELAY_PAIRS` with `tc qdisc ... netem delay` on natA's WAN link (`DELAYS`, default 0/50/100/200 ms) and writes `results/stage2_delay.csv`. It needs the `sch_netem` kernel module; the script checks first and says what to install.
-- `run_stage2.sh stage3` runs the 5×5 matrix with the stage 3 techniques and two relays in `obs` (`203.0.113.10:3480`, `203.0.113.11:3480`, secret generated per run) → `results/stage3_improved.csv`, where `path` is `direct`, `relay` or `none`.
+- `run_stage2.sh stage3` runs the 5×5 matrix with the stage 3 techniques and two relays in `obs` (`192.0.32.10:3480`, `192.0.32.11:3480`, secret generated per run) → `results/stage3_improved.csv`, where `path` is `direct`, `relay` or `none`.
 - `run_stage2.sh upgrade` holds connections for `UPGRADE_HOLD` (16) seconds with a direct retry every `UPGRADE_RETRY_MS` (5000) for `UPGRADE_PAIRS` → `results/stage3_upgrade.csv` (`natA,natB,attempt,initial_path,upgrade_ms`).
 - `check_coord_outage.sh [natA] [natB]` connects two peers, kills the coordination and STUN servers (the relay stays up) and checks 10 s of keepalives. With `symmetric-random symmetric-random` the path is relayed.
 

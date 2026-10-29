@@ -27,6 +27,7 @@ message Candidate {
   enum Type {
     HOST = 0;
     SRFLX = 1;
+    PORTMAPPED = 2;  // opened on request by the peer's router (UPnP / NAT-PMP / PCP)
   }
   Type type = 1;
   bytes ipv4 = 2;  // 4 bytes, network order

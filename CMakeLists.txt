@@ -33,8 +33,29 @@ target_link_libraries(usernat PRIVATE usernat_core)
 # Stage 2: probes, hole punching, coordination server, agent.
 find_package(OpenSSL REQUIRED)
 add_library(agent_core STATIC agent/probe.cpp agent/candidates.cpp agent/punch.cpp
-            agent/predict.cpp agent/relay_client.cpp agent/tls_relay.cpp)
+            agent/predict.cpp agent/relay_client.cpp agent/tls_relay.cpp agent/pcp.cpp
+            agent/portmap.cpp)
 target_include_directories(agent_core PUBLIC ${CMAKE_SOURCE_DIR})
+# Port mapping clients: PCP is ours and always built; NAT-PMP (libnatpmp) and UPnP (miniupnpc)
+# are used when their libraries are installed (apt install libnatpmp-dev libminiupnpc-dev).
+find_path(NATPMP_INCLUDE natpmp.h)
+find_library(NATPMP_LIB natpmp)
+if(NATPMP_INCLUDE AND NATPMP_LIB)
+  target_compile_definitions(agent_core PRIVATE PIERCE_HAVE_NATPMP=1)
+  target_include_directories(agent_core PRIVATE ${NATPMP_INCLUDE})
+  target_link_libraries(agent_core PUBLIC ${NATPMP_LIB})
+else()
+  message(WARNING "libnatpmp not found: NAT-PMP port mapping disabled")
+endif()
+find_path(MINIUPNPC_INCLUDE miniupnpc/miniupnpc.h)
+find_library(MINIUPNPC_LIB miniupnpc)
+if(MINIUPNPC_INCLUDE AND MINIUPNPC_LIB)
+  target_compile_definitions(agent_core PRIVATE PIERCE_HAVE_MINIUPNPC=1)
+  target_include_directories(agent_core PRIVATE ${MINIUPNPC_INCLUDE})
+  target_link_libraries(agent_core PUBLIC ${MINIUPNPC_LIB})
+else()
+  message(WARNING "miniupnpc not found: UPnP port mapping disabled")
+endif()
 target_link_libraries(agent_core PUBLIC stun relay_core OpenSSL::Crypto)
 
 # Stage 3: relay.
@@ -125,7 +146,7 @@ if(Python3_FOUND)
 endif()
 
 add_executable(agent_tests tests/probe_test.cpp tests/punch_test.cpp
-               tests/predict_test.cpp)
+               tests/predict_test.cpp tests/pcp_test.cpp)
 target_link_libraries(agent_tests PRIVATE agent_core GTest::gtest_main)
 add_test(NAME agent_tests COMMAND agent_tests)
 

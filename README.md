@@ -209,8 +209,8 @@ sudo ./lab/ci.sh                            # the CI regression run: 10 attempts
 ## STUN and NAT type detection
 
 ```sh
-build/stun_server --ip 203.0.113.10 --alt-ip 203.0.113.11            # ports 3478 and 3479 on both IPs
-build/nat_detect --server 203.0.113.10:3478 --alt-ip 203.0.113.11    # prints "<type>,<ms>"
+build/stun_server --ip 192.0.32.10 --alt-ip 192.0.32.11            # ports 3478 and 3479 on both IPs
+build/nat_detect --server 192.0.32.10:3478 --alt-ip 192.0.32.11    # prints "<type>,<ms>"
 ```
 
 The detector first sends Binding requests from one socket to three addresses of the server (primary, other IP, other port). Different public ports mean a symmetric NAT: the same small step each time (e.g. +1, +1) is `symmetric-sequential`, anything else `symmetric-random`. Same port means a cone NAT, and two more tests on fresh sockets ask the server (CHANGE-REQUEST, RFC 5780) to answer from its other IP, then from its other port: the first getting through means `full`, the second `restricted`, neither `port-restricted`.
@@ -220,9 +220,9 @@ The filtering tests need one server with two IPs, which the lab has. Two separat
 ## Hole punching (stage 2)
 
 ```sh
-build/pierce-coord --listen 203.0.113.10:50051
-build/pierce-agent --coord 203.0.113.10:50051 --stun 203.0.113.10:3478 --id A --peer B
-# prints: success,time_to_connect_ms,probes_sent,path,remote   e.g. 1,44,3,direct,203.0.113.2:42790
+build/pierce-coord --listen 192.0.32.10:50051
+build/pierce-agent --coord 192.0.32.10:50051 --stun 192.0.32.10:3478 --id A --peer B
+# prints: success,time_to_connect_ms,probes_sent,path,remote   e.g. 1,44,3,direct,192.0.32.2:42790
 ```
 
 1. The agent opens **one** UDP socket and uses it for everything: STUN, probes, and later WireGuard. NAT mappings belong to a socket, so the public address STUN reports is only useful if the probes leave from the same socket.
@@ -234,8 +234,8 @@ build/pierce-agent --coord 203.0.113.10:50051 --stun 203.0.113.10:3478 --id A --
 ## Relay (stage 3)
 
 ```sh
-build/pierce-relay --listen 203.0.113.10:3480 --secret <hex>
-build/pierce-coord --listen 203.0.113.10:50051 --relay 203.0.113.10:3480 --relay 203.0.113.11:3480 --relay-secret <hex>
+build/pierce-relay --listen 192.0.32.10:3480 --secret <hex>
+build/pierce-coord --listen 192.0.32.10:50051 --relay 192.0.32.10:3480 --relay 192.0.32.11:3480 --relay-secret <hex>
 ```
 
 The relay forwards packets between the two endpoints that bound with the same token. With `--tls-listen`/`--tls-cert`/`--tls-key` (and `--relay-tls-port` on the coordination server) it also accepts agents over TCP/TLS, for networks that block UDP: the same protocol, one datagram per length-prefixed frame. The agent falls back to it when the UDP relay does not answer. A token is `session id | expiry | HMAC(secret)`, issued by the coordination server and checked by the relay alone, so a relayed connection keeps working while the coordination server is down until the token expires (600 s by default). Relay control packets start with `0xFE` (BIND, BOUND, PING, PONG); everything else is forwarded unchanged, so the relay only ever sees WireGuard ciphertext and probes.

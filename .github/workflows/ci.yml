@@ -16,7 +16,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake g++ libgtest-dev libssl-dev libsqlite3-dev \
             libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc \
-            iproute2 iputils-ping nftables python3
+            iproute2 iputils-ping nftables python3 \
+            libnatpmp-dev libminiupnpc-dev
 
       - name: Build
         run: |

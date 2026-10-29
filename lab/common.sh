@@ -4,11 +4,15 @@ set -euo pipefail
 
 # Topology (everything lives in network namespaces; the host network is never touched):
 #
-#   peerA 10.0.1.2 -- natA 10.0.1.1 | 203.0.113.1 --+
+#   peerA 10.0.1.2 -- natA 10.0.1.1 | 192.0.32.1 --+
 #                                                   |  bridge "br0" inside netns pierce-inet
-#   peerB 10.0.2.2 -- natB 10.0.2.1 | 203.0.113.2 --+
+#   peerB 10.0.2.2 -- natB 10.0.2.1 | 192.0.32.2 --+
 #                                                   |
-#                    obs 203.0.113.10, 203.0.113.11 +  (two "public servers": STUN, NAT self-check)
+#                    obs 192.0.32.10, 192.0.32.11 +  (two "public servers": STUN, NAT self-check)
+#
+# Why 192.0.32.0/24 and not a documentation range like 203.0.113.0/24: miniupnpd (the port
+# mapping daemon run with PORTMAP) refuses to hand out mappings on a reserved external address.
+# The namespaces have no route to the real internet, so nothing is ever sent to these addresses.
 #
 # Why the bridge is in its own netns: Docker loads br_netfilter, which sends bridged traffic on the
 # host through Docker's iptables FORWARD chain (policy DROP). A fresh netns has none of that.
@@ -24,10 +28,10 @@ PEER_A_IP=10.0.1.2
 PEER_B_IP=10.0.2.2
 NAT_A_LAN_IP=10.0.1.1
 NAT_B_LAN_IP=10.0.2.1
-NAT_A_WAN_IP=203.0.113.1
-NAT_B_WAN_IP=203.0.113.2
-OBS_IP1=203.0.113.10
-OBS_IP2=203.0.113.11
+NAT_A_WAN_IP=192.0.32.1
+NAT_B_WAN_IP=192.0.32.2
+OBS_IP1=192.0.32.10
+OBS_IP2=192.0.32.11
 
 NAT_TYPES=(full restricted port-restricted symmetric-random symmetric-sequential)
 
