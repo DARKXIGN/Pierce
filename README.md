@@ -143,16 +143,19 @@ A connection that started on the relay retries the direct path in the background
 
 Real IP traffic between TUN devices (peerA 10.99.0.1, peerB 10.99.0.2) through WireGuard (BoringTun) over the path the agents found, measured from peerA: 50 pings and a 5 s iperf3 TCP transfer per run. The lab's links have no delay, so ping shows the cost of the tunnel itself. The `symmetric-sequential` pair is limited by the userspace NAT, which copies every packet through user space; that is not WireGuard's limit.
 
+The `+udp-blocked` rows drop all of peerA's UDP at its NAT, like a network that only lets TCP out: no STUN, no direct path, no UDP relay, so both agents meet on the relay over TCP/TLS (`relay-tls`).
+
 On every relayed run, tcpdump checks the relay hop: the pings carry a marker that is visible on peerA's TUN device and never in the packets to or from the relay. The last relayed capture is kept as `results/stage4_relay_hop.pcap` (not committed: `*.pcap` is git-ignored).
 
 <!-- report:stage4:start -->
 | NAT A × NAT B | path | runs | ping, median ms | loss, worst | iperf3, median / min Mbit/s |
 |---|---|---|---|---|---|
-| port-restricted × port-restricted | direct | 5 | 0.56 | 0% | 813 / 724 |
-| symmetric-random × port-restricted | direct | 3 | 0.54 | 0% | 760 / 741 |
-| symmetric-random × port-restricted | relay | 2 | 0.71 | 0% | 651 / 651 |
-| symmetric-random × symmetric-random | relay | 5 | 0.83 | 0% | 741 / 598 |
-| symmetric-sequential × symmetric-sequential | direct | 5 | 0.92 | 0% | 330 / 313 |
+| port-restricted × port-restricted | direct | 5 | 0.49 | 0% | 832 / 774 |
+| symmetric-random × port-restricted | direct | 3 | 0.47 | 0% | 793 / 786 |
+| symmetric-random × port-restricted | relay | 2 | 0.77 | 0% | 711 / 711 |
+| symmetric-random × symmetric-random | relay | 5 | 0.76 | 0% | 717 / 630 |
+| symmetric-sequential × symmetric-sequential | direct | 5 | 0.84 | 0% | 331 / 326 |
+| port-restricted+udp-blocked × port-restricted | relay-tls | 5 | 1.10 | 0% | 393 / 356 |
 <!-- report:stage4:end -->
 
 Real networks (home ↔ OCI, hotspot ↔ OCI, home ↔ hotspot) and NAT mapping lifetimes are not measured yet.
@@ -236,7 +239,7 @@ build/pierce-relay --listen 203.0.113.10:3480 --secret <hex>
 build/pierce-coord --listen 203.0.113.10:50051 --relay 203.0.113.10:3480 --relay 203.0.113.11:3480 --relay-secret <hex>
 ```
 
-The relay forwards packets between the two endpoints that bound with the same token. A token is `session id | expiry | HMAC(secret)`, issued by the coordination server and checked by the relay alone, so a relayed connection keeps working while the coordination server is down until the token expires (600 s by default). Relay control packets start with `0xFE` (BIND, BOUND, PING, PONG); everything else is forwarded unchanged, so the relay only ever sees WireGuard ciphertext and probes.
+The relay forwards packets between the two endpoints that bound with the same token. With `--tls-listen`/`--tls-cert`/`--tls-key` (and `--relay-tls-port` on the coordination server) it also accepts agents over TCP/TLS, for networks that block UDP: the same protocol, one datagram per length-prefixed frame. The agent falls back to it when the UDP relay does not answer. A token is `session id | expiry | HMAC(secret)`, issued by the coordination server and checked by the relay alone, so a relayed connection keeps working while the coordination server is down until the token expires (600 s by default). Relay control packets start with `0xFE` (BIND, BOUND, PING, PONG); everything else is forwarded unchanged, so the relay only ever sees WireGuard ciphertext and probes.
 
 ## Data plane (stage 4)
 
