@@ -150,13 +150,13 @@ Time to connect, median / p95 in ms (successful attempts only).
 
 | NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
 |---|---|---|---|---|---|
-| full+portmap | 65 / 74 | 64 / 73 | 63 / 70 | 49 / 63 | 64 / 75 |
-| restricted+portmap | 63 / 72 | 63 / 72 | 63 / 74 | 46 / 62 | 64 / 73 |
-| port-restricted+portmap | 62 / 70 | 61 / 68 | 62 / 71 | 47 / 60 | 63 / 68 |
-| symmetric-random+portmap | 79 / 102 | 75 / 99 | 81 / 104 | 62 / 69 | 63 / 75 |
-| symmetric-random+pcp | — | — | — | 61 / 69 | — |
-| symmetric-random+natpmp | — | — | — | 65 / 72 | — |
-| symmetric-random+upnp | — | — | — | 130 / 143 | — |
+| full+portmap | 44 / 45 | 44 / 45 | 44 / 45 | 25 / 26 | 45 / 46 |
+| restricted+portmap | 44 / 45 | 44 / 45 | 44 / 45 | 25 / 26 | 45 / 45 |
+| port-restricted+portmap | 44 / 45 | 44 / 45 | 44 / 45 | 25 / 26 | 45 / 45 |
+| symmetric-random+portmap | 27 / 34 | 27 / 35 | 27 / 32 | 44 / 45 | 45 / 45 |
+| symmetric-random+pcp | — | — | — | 44 / 45 | — |
+| symmetric-random+natpmp | — | — | — | 45 / 46 | — |
+| symmetric-random+upnp | — | — | — | 92 / 93 | — |
 <!-- report:portmap:end -->
 
 When no router answers, the probes fail at once with ICMP port unreachable; a router that silently drops them costs up to 500 ms before signaling goes on without a mapping.
