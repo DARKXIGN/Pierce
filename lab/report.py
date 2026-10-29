@@ -86,10 +86,11 @@ def load(paths: list[str], time_col: str, by: str | None = None):
 def table(cells, fmt) -> str:
     lines = ["| NAT A \\ NAT B | " + " | ".join(NAT_TYPES) + " |",
              "|---|" + "---|" * len(NAT_TYPES)]
-    # Rows: the five NAT types, then any other NAT A labels in the data (e.g. "full+portmap"),
-    # in the order they first appear.
-    extra = [a for a in dict.fromkeys(k[0] for k in cells) if a not in NAT_TYPES]
-    for a in NAT_TYPES + extra:
+    # Rows: the NAT types that occur as NAT A, then any other NAT A labels in the data (e.g.
+    # "full+portmap"), in the order they first appear.
+    present = dict.fromkeys(k[0] for k in cells)
+    rows = [a for a in NAT_TYPES if a in present] + [a for a in present if a not in NAT_TYPES]
+    for a in rows:
         row = [fmt(cells[(a, b)]) if (a, b) in cells else "—" for b in NAT_TYPES]
         lines.append(f"| {a} | " + " | ".join(row) + " |")
     return "\n".join(lines)

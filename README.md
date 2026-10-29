@@ -138,11 +138,6 @@ Success rate [Wilson 95% CI], n = 100 attempts per cell.
 
 | NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
 |---|---|---|---|---|---|
-| full | — | — | — | — | — |
-| restricted | — | — | — | — | — |
-| port-restricted | — | — | — | — | — |
-| symmetric-random | — | — | — | — | — |
-| symmetric-sequential | — | — | — | — | — |
 | full+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
 | restricted+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
 | port-restricted+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
@@ -155,11 +150,6 @@ Time to connect, median / p95 in ms (successful attempts only).
 
 | NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
 |---|---|---|---|---|---|
-| full | — | — | — | — | — |
-| restricted | — | — | — | — | — |
-| port-restricted | — | — | — | — | — |
-| symmetric-random | — | — | — | — | — |
-| symmetric-sequential | — | — | — | — | — |
 | full+portmap | 65 / 74 | 64 / 73 | 63 / 70 | 49 / 63 | 64 / 75 |
 | restricted+portmap | 63 / 72 | 63 / 72 | 63 / 74 | 46 / 62 | 64 / 73 |
 | port-restricted+portmap | 62 / 70 | 61 / 68 | 62 / 71 | 47 / 60 | 63 / 68 |
