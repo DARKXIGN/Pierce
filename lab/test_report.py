@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ci_check  # noqa: E402
 import report  # noqa: E402
 
 
@@ -92,6 +93,40 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("| NAT A × NAT B | delay_ms = 0 | delay_ms = 50 | delay_ms = 200 |", body)
         self.assertIn("| full × full | 100% [72–100] | 100% [72–100] | 100% [72–100] |", body)
         self.assertIn("| port-restricted × symmetric-random | 0% [0–28] | — | — |", body)
+
+
+class CiCheck(unittest.TestCase):
+    def write(self, rows):
+        f = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
+        f.write("natA,natB,attempt,success,time_to_connect_ms,probes_sent,path\n")
+        f.write("\n".join(rows) + "\n")
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def rows(self, a, b, ok, n, fail_path="relay"):
+        return [f"{a},{b},{i},{int(i <= ok)},,1,{'direct' if i <= ok else fail_path}"
+                for i in range(1, n + 1)]
+
+    def test_binom_cdf(self):
+        self.assertAlmostEqual(ci_check.binom_cdf(10, 10, 0.3), 1.0)
+        self.assertAlmostEqual(ci_check.binom_cdf(0, 2, 0.5), 0.25)
+
+    def test_tolerates_noise_fails_on_regression(self):
+        ref = self.write(self.rows("full", "full", 100, 100) +
+                         self.rows("symmetric-random", "port-restricted", 64, 100))
+        # 8/10 against 100/100 passes, 7/10 fails; 3/10 against 64/100 passes, 1/10 fails.
+        self.assertEqual(ci_check.check(ref, self.write(self.rows("full", "full", 8, 10))), [])
+        self.assertEqual(len(ci_check.check(ref, self.write(self.rows("full", "full", 7, 10)))), 1)
+        self.assertEqual(ci_check.check(
+            ref, self.write(self.rows("symmetric-random", "port-restricted", 3, 10))), [])
+        self.assertEqual(len(ci_check.check(
+            ref, self.write(self.rows("symmetric-random", "port-restricted", 1, 10)))), 1)
+
+    def test_lost_relay_fallback_fails(self):
+        ref = self.write(self.rows("symmetric-random", "symmetric-random", 0, 100))
+        run = self.write(self.rows("symmetric-random", "symmetric-random", 0, 10, fail_path="none"))
+        self.assertEqual(len(ci_check.check(ref, run)), 1)
 
 
 if __name__ == "__main__":
