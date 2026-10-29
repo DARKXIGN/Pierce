@@ -135,8 +135,8 @@ A connection that started on the relay retries the direct path in the background
 <!-- report:upgrade:start -->
 | NAT A × NAT B | started on relay | upgraded to direct | upgrade time, median / p95 ms |
 |---|---|---|---|
-| port-restricted × symmetric-random | 8 | 100% [68–100] | 5057 / 5256 |
-| symmetric-random × port-restricted | 6 | 100% [61–100] | 5192 / 10034 |
+| port-restricted × symmetric-random | 36 | 100% [90–100] | 5196 / 10098 |
+| symmetric-random × port-restricted | 39 | 100% [91–100] | 5155 / 10207 |
 <!-- report:upgrade:end -->
 
 ### Stage 4: traffic through the tunnel (lab)
@@ -150,12 +150,11 @@ On every relayed run, tcpdump checks the relay hop: the pings carry a marker tha
 <!-- report:stage4:start -->
 | NAT A × NAT B | path | runs | ping, median ms | loss, worst | iperf3, median / min Mbit/s |
 |---|---|---|---|---|---|
-| port-restricted × port-restricted | direct | 5 | 0.49 | 0% | 832 / 774 |
-| symmetric-random × port-restricted | direct | 3 | 0.47 | 0% | 793 / 786 |
-| symmetric-random × port-restricted | relay | 2 | 0.77 | 0% | 711 / 711 |
-| symmetric-random × symmetric-random | relay | 5 | 0.76 | 0% | 717 / 630 |
-| symmetric-sequential × symmetric-sequential | direct | 5 | 0.84 | 0% | 331 / 326 |
-| port-restricted+udp-blocked × port-restricted | relay-tls | 5 | 1.10 | 0% | 393 / 356 |
+| port-restricted × port-restricted | direct | 5 | 0.25 | 0% | 662 / 638 |
+| symmetric-random × port-restricted | direct | 5 | 0.25 | 0% | 677 / 654 |
+| symmetric-random × symmetric-random | relay | 5 | 0.37 | 0% | 658 / 635 |
+| symmetric-sequential × symmetric-sequential | direct | 5 | 0.39 | 0% | 423 / 413 |
+| port-restricted+udp-blocked × port-restricted | relay-tls | 5 | 0.53 | 0% | 346 / 342 |
 <!-- report:stage4:end -->
 
 Real networks (home ↔ OCI, hotspot ↔ OCI, home ↔ hotspot) and NAT mapping lifetimes are not measured yet.
