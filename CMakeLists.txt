@@ -33,14 +33,15 @@ target_link_libraries(usernat PRIVATE usernat_core)
 # Stage 2: probes, hole punching, coordination server, agent.
 find_package(OpenSSL REQUIRED)
 add_library(agent_core STATIC agent/probe.cpp agent/candidates.cpp agent/punch.cpp
-            agent/predict.cpp agent/relay_client.cpp)
+            agent/predict.cpp agent/relay_client.cpp agent/tls_relay.cpp)
 target_include_directories(agent_core PUBLIC ${CMAKE_SOURCE_DIR})
 target_link_libraries(agent_core PUBLIC stun relay_core OpenSSL::Crypto)
 
 # Stage 3: relay.
-add_library(relay_core STATIC relay/protocol.cpp relay/table.cpp)
+add_library(relay_core STATIC relay/protocol.cpp relay/table.cpp relay/framing.cpp
+            relay/tls_server.cpp)
 target_include_directories(relay_core PUBLIC ${CMAKE_SOURCE_DIR})
-target_link_libraries(relay_core PUBLIC stun OpenSSL::Crypto)
+target_link_libraries(relay_core PUBLIC stun OpenSSL::SSL OpenSSL::Crypto)
 add_executable(pierce-relay relay/main.cpp)
 target_link_libraries(pierce-relay PRIVATE relay_core)
 

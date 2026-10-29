@@ -76,7 +76,9 @@ attempt() {
   # Each agent printed "direct,time_ms,probes,path,remote".
   paste -d, "$ra" "$rb" | awk -F, -v p="$prefix" '{
       ok = ($1 == 1 && $6 == 1)
-      path = ok ? "direct" : (($4 == "relay" && $9 == "relay") ? "relay" : "none")
+      # Both reached each other through the relay; "relay-tls" if either side went over TCP/TLS.
+      rel = ($4 ~ /^relay/ && $9 ~ /^relay/)
+      path = ok ? "direct" : (rel ? (($4 == "relay-tls" || $9 == "relay-tls") ? "relay-tls" : "relay") : "none")
       ms = (path == "none") ? "" : (($2 > $7) ? $2 : $7)
       print p "," ok "," ms "," ($3 + $8) "," path }' >> "$out"
   rm -f "$ra" "$rb"
@@ -103,7 +105,7 @@ run_combo() {
   ok=$(awk -F, -v a="$a" -v b="$b" -v d="$delay" \
     '$1==a && $2==b && (d=="" || $3==d) && $(NF-3)==1' "$out" | wc -l)
   relayed=$(awk -F, -v a="$a" -v b="$b" -v d="$delay" \
-    '$1==a && $2==b && (d=="" || $3==d) && $NF=="relay"' "$out" | wc -l)
+    '$1==a && $2==b && (d=="" || $3==d) && $NF ~ /^relay/' "$out" | wc -l)
   printf '%-21s %-21s %s%s/%s direct%s\n' "$a" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts" \
     "$([[ $use_relays == 1 ]] && echo ", $relayed relay")"
 }

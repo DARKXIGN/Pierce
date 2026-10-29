@@ -87,3 +87,36 @@ TEST(RelaySecret, FromHex) {
   EXPECT_FALSE(relay::secret_from_hex("zz"));
   EXPECT_FALSE(relay::secret_from_hex(""));
 }
+
+#include "relay/framing.hpp"
+
+TEST(RelayFraming, RoundTripAcrossArbitraryChunks) {
+  const std::vector<std::uint8_t> a = {1, 2, 3}, b(1500, 0x04), empty;
+  std::vector<std::uint8_t> stream;
+  for (const auto* d : {&a, &b, &empty}) {
+    auto f = relay::frame(*d);
+    stream.insert(stream.end(), f.begin(), f.end());
+  }
+  relay::Deframer df;
+  std::vector<std::vector<std::uint8_t>> got;
+  // Feed in odd-sized pieces, as TCP may deliver them.
+  for (std::size_t i = 0; i < stream.size(); i += 7) {
+    df.feed(std::span(stream).subspan(i, std::min<std::size_t>(7, stream.size() - i)));
+    while (auto d = df.next()) got.push_back(*d);
+  }
+  ASSERT_EQ(got.size(), 3u);
+  EXPECT_EQ(got[0], a);
+  EXPECT_EQ(got[1], b);
+  EXPECT_EQ(got[2], empty);
+}
+
+TEST(RelayFraming, StreamEndpointsNeverLookLikeUdp) {
+  const auto ep = relay::stream_endpoint(0x123456);
+  EXPECT_EQ(relay::stream_id(ep), 0x123456u);
+  EXPECT_FALSE(relay::stream_id(Endpoint{{198, 51, 100, 1}, 4000}));
+  // The table forwards to stream endpoints like to any other.
+  relay::Table t(kSecret, std::chrono::seconds(60));
+  t.handle(relay::bind_message(token(9)), ep, kNow);
+  t.handle(relay::bind_message(token(9)), kB, kNow);
+  EXPECT_EQ(t.handle(kData, kB, kNow)->to, ep);
+}

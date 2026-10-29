@@ -1,7 +1,8 @@
 // pierce-coord: the coordination server.
 //
 //   pierce-coord --listen 203.0.113.10:50051 [--db nodes.sqlite] [--margin-ms 20] [-v]
-//                [--relay IP:PORT ... --relay-secret HEX [--relay-token-ttl SEC]]
+//                [--relay IP:PORT ... --relay-secret HEX [--relay-token-ttl SEC]
+//                 [--relay-tls-port N]]
 //
 // Each --relay adds one relay to offer; the first is the default when RTTs are missing.
 #include <grpcpp/grpcpp.h>
@@ -19,7 +20,8 @@ namespace {
 [[noreturn]] void usage() {
   std::fputs(
       "usage: pierce-coord --listen HOST:PORT [--db FILE] [--margin-ms N] [-v]\n"
-      "                    [--relay IP:PORT ... --relay-secret HEX [--relay-token-ttl SEC]]\n",
+      "                    [--relay IP:PORT ... --relay-secret HEX [--relay-token-ttl SEC]\n"
+      "                     [--relay-tls-port N]]\n",
       stderr);
   std::exit(2);
 }
@@ -46,6 +48,8 @@ int main(int argc, char** argv) try {
       auto sec = relay::secret_from_hex(value());
       if (!sec) usage();
       opt.relay_secret = *sec;
+    } else if (a == "--relay-tls-port") {
+      opt.relay_tls_port = static_cast<std::uint16_t>(std::atoi(value().c_str()));
     } else if (a == "--relay-token-ttl") opt.relay_token_ttl = std::chrono::seconds(std::atoi(value().c_str()));
     else usage();
   }

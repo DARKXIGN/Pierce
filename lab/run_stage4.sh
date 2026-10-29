@@ -5,6 +5,9 @@
 #   connection can come about: port-restricted x2 (plain hole punching), symmetric-random x
 #   port-restricted (birthday probing, so direct or relayed), symmetric-sequential x2 (port
 #   prediction through the userspace NAT) and symmetric-random x2 (always relayed).
+#   UDP_BLOCKED_PAIRS (default port-restricted:port-restricted) then run the same with all of
+#   peerA's UDP dropped at its NAT, like a network that only lets TCP out: no STUN, no direct
+#   path, no UDP relay, so the agents must meet on the relay over TCP/TLS (path relay-tls).
 #
 # Per run: both agents connect with the stage 3 techniques and then carry traffic between TUN
 # devices (peerA 10.99.0.1, peerB 10.99.0.2). Measured from peerA: 50 pings (100 ms apart) and
@@ -32,6 +35,11 @@ tmp=$(mktemp -d)
 MARKER=5069657263652d706c61696e  # "Pierce-plain" as hex, the ping payload pattern
 secret=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 
+# The relay's TLS certificate: self-signed, made per run. Agents do not check it (see
+# agent/tls_relay.hpp); it only has to exist for TLS.
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$tmp/relay.key" -out "$tmp/relay.crt" \
+  -days 1 -subj /CN=pierce-relay >/dev/null 2>&1
+
 # Keys are made once and exchanged "in advance" (here: through files), never via the coordinator.
 "$build/pierce-wgkey" genkey > "$tmp/a.key"; "$build/pierce-wgkey" pubkey < "$tmp/a.key" > "$tmp/a.pub"
 "$build/pierce-wgkey" genkey > "$tmp/b.key"; "$build/pierce-wgkey" pubkey < "$tmp/b.key" > "$tmp/b.pub"
@@ -39,10 +47,11 @@ secret=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 start_servers() {
   ip netns exec "$NS_OBS" "$build/stun_server" --ip "$OBS_IP1" --alt-ip "$OBS_IP2" >/dev/null 2>&1 &
   servers="$!"
-  ip netns exec "$NS_OBS" "$build/pierce-relay" --listen "$OBS_IP1:3480" --secret "$secret" >/dev/null 2>&1 &
+  ip netns exec "$NS_OBS" "$build/pierce-relay" --listen "$OBS_IP1:3480" --secret "$secret" \
+    --tls-listen "$OBS_IP1:3443" --tls-cert "$tmp/relay.crt" --tls-key "$tmp/relay.key" >/dev/null 2>&1 &
   servers+=" $!"
   ip netns exec "$NS_OBS" "$build/pierce-coord" --listen "$OBS_IP1:50051" \
-    --relay "$OBS_IP1:3480" --relay-secret "$secret" >/dev/null 2>&1 &
+    --relay "$OBS_IP1:3480" --relay-secret "$secret" --relay-tls-port 3443 >/dev/null 2>&1 &
   servers+=" $!"
   sleep 0.3
 }
@@ -60,7 +69,7 @@ tun_up() {
 found() { python3 -c "import sys; sys.exit(0 if bytes.fromhex('$1') in open('$2','rb').read() else 1)"; }
 
 one_run() {
-  local a=$1 b=$2 i=$3
+  local a=$1 b=$2 i=$3 label_a=${4:-$1}
   : > "$tmp/a.err"; : > "$tmp/b.err"  # exist before the wait loop below greps them
   local args=(--coord "$OBS_IP1:50051" --stun "$OBS_IP1:3478" --stun-alt-ip "$OBS_IP2"
               --tun pierce0 --hold 30)
@@ -71,7 +80,7 @@ one_run() {
     --wg-key "$(cat "$tmp/b.key")" --wg-peer "$(cat "$tmp/a.pub")" >"$tmp/b.out" 2>"$tmp/b.err" &
   local pb=$!
   local _
-  for _ in $(seq 100); do
+  for _ in $(seq 150); do  # up to 15 s: the TLS fallback comes after the UDP relay timed out
     grep -q "dataplane up" "$tmp/a.err" && grep -q "dataplane up" "$tmp/b.err" && break
     sleep 0.1
   done
@@ -80,8 +89,8 @@ one_run() {
   for _ in $(seq 20); do ns_exec "$NS_PEER_A" ping -c 1 -W 1 10.99.0.2 >/dev/null 2>&1 && break; done
 
   local cap_relay="$tmp/relay.pcap" cap_tun="$tmp/tun.pcap" tcpd=""
-  if [[ $path == relay ]]; then
-    ip netns exec "$NS_OBS" tcpdump -i obs0 -U -w "$cap_relay" udp port 3480 >/dev/null 2>&1 &
+  if [[ $path == relay* ]]; then
+    ip netns exec "$NS_OBS" tcpdump -i obs0 -U -w "$cap_relay" udp port 3480 or tcp port 3443 >/dev/null 2>&1 &
     tcpd="$!"
     ip netns exec "$NS_PEER_A" tcpdump -i pierce0 -U -w "$cap_tun" icmp >/dev/null 2>&1 &
     tcpd+=" $!"
@@ -109,9 +118,9 @@ one_run() {
          python3 -c "import json,sys; print(round(json.load(sys.stdin)['end']['sum_received']['bits_per_second']/1e6, 1))" 2>/dev/null)
   wait "$srv" 2>/dev/null || true
   kill "$pa" "$pb" 2>/dev/null; wait "$pa" "$pb" 2>/dev/null || true
-  echo "$a,$b,$i,${path:-none},$avg,$loss,$mbps" >> "$out"
-  printf '%-21s %-21s run %d: path=%-6s ping avg=%s ms loss=%s%% iperf3=%s Mbit/s\n' \
-    "$a" "$b" "$i" "${path:-none}" "${avg:-?}" "${loss:-?}" "${mbps:-?}"
+  echo "$label_a,$b,$i,${path:-none},$avg,$loss,$mbps" >> "$out"
+  printf '%-21s %-21s run %d: path=%-9s ping avg=%s ms loss=%s%% iperf3=%s Mbit/s\n' \
+    "$label_a" "$b" "$i" "${path:-none}" "${avg:-?}" "${loss:-?}" "${mbps:-?}"
 }
 
 relay_check=0
@@ -126,6 +135,20 @@ for pair in ${PAIRS:-$default_pairs}; do
     tun_up "$NS_PEER_B" 10.99.0.2
     start_servers
     one_run "$a" "$b" "$i"
+    stop_servers
+  done
+done
+for pair in ${UDP_BLOCKED_PAIRS-port-restricted:port-restricted}; do
+  a=${pair%%:*} b=${pair##*:}
+  for ((i = 1; i <= runs; i++)); do
+    "$here/teardown.sh" >/dev/null 2>&1
+    "$here/setup.sh" "$a" "$b" >/dev/null 2>&1 || { echo "setup failed: $a $b" >&2; continue; }
+    # peerA's network lets no UDP through at all, in either direction.
+    ns_exec "$NS_NAT_A" nft insert rule ip filter forward meta l4proto udp drop
+    tun_up "$NS_PEER_A" 10.99.0.1
+    tun_up "$NS_PEER_B" 10.99.0.2
+    start_servers
+    one_run "$a" "$b" "$i" "$a+udp-blocked"
     stop_servers
   done
 done

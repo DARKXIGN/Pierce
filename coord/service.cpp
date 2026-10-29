@@ -233,6 +233,7 @@ void Service::run_pairing(std::shared_ptr<Peer> a, std::shared_ptr<Peer> b) {
     const auto token = relay::issue_token(t, opt_.relay_secret);
     grant.emplace();
     *grant->mutable_relay_grant()->mutable_relay() = to_proto(opt_.relays[idx]);
+    grant->mutable_relay_grant()->mutable_relay()->set_tls_port(opt_.relay_tls_port);
     grant->mutable_relay_grant()->set_token(std::string(token.begin(), token.end()));
   }
 

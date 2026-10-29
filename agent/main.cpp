@@ -16,6 +16,7 @@
 // Prints one line to stdout:  direct,time_to_connect_ms,probes_sent,path,remote
 //   1,142,7,direct,203.0.113.2:41000     connected directly
 //   0,3071,160,relay,203.0.113.10:3480   direct failed, connected through the relay
+//   0,4210,180,relay-tls,127.0.0.1:41000 same, over TCP/TLS (UDP to the relay got no answer)
 //   0,,150,none,                         neither
 // time_to_connect_ms runs from sending Register (start of signaling) to the first authenticated
 // probe response, over whichever path won. The direct attempt gets --timeout-ms (3 s); if it
@@ -44,6 +45,7 @@
 #include "agent/predict.hpp"
 #include "agent/punch.hpp"
 #include "agent/relay_client.hpp"
+#include "agent/tls_relay.hpp"
 #include "coord.grpc.pb.h"
 #include "stun/client.hpp"
 #include "stun/udp.hpp"
@@ -128,6 +130,7 @@ struct Signal {
   bool relays_received = false;
   std::uint64_t punch_seq = 0;  // counts PunchIn messages, so a retry can wait for a new one
   std::optional<stun::Endpoint> relay;  // from RelayGrant
+  std::uint16_t relay_tls_port = 0;
   relay::TokenBytes relay_token{};
   bool closed = false;
 };
@@ -297,6 +300,7 @@ int main(int argc, char** argv) try {
         sig.relays_received = true;
       } else if (m.has_relay_grant() && m.relay_grant().token().size() == relay::kTokenSize) {
         sig.relay = from_proto(m.relay_grant().relay());
+        sig.relay_tls_port = static_cast<std::uint16_t>(m.relay_grant().relay().tls_port());
         std::copy(m.relay_grant().token().begin(), m.relay_grant().token().end(),
                   sig.relay_token.begin());
       }
@@ -320,6 +324,7 @@ int main(int argc, char** argv) try {
     Clock::time_point punch_at;
   };
   std::optional<stun::Endpoint> relay_ep;
+  std::uint16_t relay_tls_port = 0;
   relay::TokenBytes relay_token{};
   // Waits for a PunchIn newer than `seen`.
   auto wait_plan = [&](std::uint64_t seen) -> std::optional<Plan> {
@@ -330,6 +335,7 @@ int main(int argc, char** argv) try {
     if (!got || sig.punch_seq <= seen || sig.key.empty() || sig.peer_candidates.empty())
       return std::nullopt;
     relay_ep = sig.relay;
+    relay_tls_port = sig.relay_tls_port;
     relay_token = sig.relay_token;
     return Plan{sig.peer_candidates, sig.peer_nat, sig.key, sig.punch_received + *sig.punch_delay};
   };
@@ -422,17 +428,35 @@ int main(int argc, char** argv) try {
   //    time (same punch moment, same timeout), bind with the shared token, and probe each other
   //    through it. The relay is just another candidate whose packets the relay forwards.
   std::optional<agent::Puncher> via_relay;
-  if (!res.success && relay_ep &&
-      agent::bind_relay(sock, *relay_ep, relay_token, std::chrono::milliseconds(200), 5)) {
-    via_relay.emplace(sock, plan->key,
-                      std::vector<Candidate>{{CandidateType::Relayed, *relay_ep,
-                                              agent::priority(CandidateType::Relayed)}});
-    agent::PunchOptions ropt = popt;
-    ropt.timeout = std::chrono::milliseconds(2000);
-    res = via_relay->connect(ropt);
-    probes += via_relay->probes_sent();
-    active = &*via_relay;
-    path_name = "relay";
+  std::optional<agent::TlsRelayShim> tls_shim;
+  if (!res.success && relay_ep) {
+    // UDP to the relay first. If that gets no answer (a network that blocks UDP), the same relay
+    // over TCP/TLS, through a shim that makes it look like a UDP relay at a loopback address.
+    std::optional<stun::Endpoint> relay_at;
+    if (agent::bind_relay(sock, *relay_ep, relay_token, std::chrono::milliseconds(200), 5)) {
+      relay_at = relay_ep;
+    } else if (relay_tls_port != 0) {
+      try {
+        tls_shim.emplace(stun::Endpoint{relay_ep->ipv4, relay_tls_port}, std::chrono::milliseconds(2000));
+        if (agent::bind_relay(sock, tls_shim->local(), relay_token, std::chrono::milliseconds(300), 5))
+          relay_at = tls_shim->local();
+      } catch (const std::exception& e) {
+        std::fprintf(stderr, "pierce-agent: TLS relay: %s\n", e.what());
+      }
+    }
+    if (relay_at) {
+      via_relay.emplace(sock, plan->key,
+                        std::vector<Candidate>{{CandidateType::Relayed, *relay_at,
+                                                agent::priority(CandidateType::Relayed)}});
+      agent::PunchOptions ropt = popt;
+      // Long enough to overlap with a peer that reaches the relay a bit later (e.g. it first
+      // waited for the UDP relay to answer, then went over TLS).
+      ropt.timeout = std::chrono::milliseconds(3000);
+      res = via_relay->connect(ropt);
+      probes += via_relay->probes_sent();
+      active = &*via_relay;
+      path_name = tls_shim ? "relay-tls" : "relay";
+    }
   }
   if (!res.success) {
     stop_signaling();

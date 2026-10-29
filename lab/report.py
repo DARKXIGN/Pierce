@@ -7,7 +7,7 @@
 Input: one row per attempt with at least `natA,natB,success` (success is 0/1). If the time column
 (default `time_to_connect_ms`, see --time-col) exists, a second table with median / p95 of the
 successful attempts is added. If a `path` column contains "relay", a third table gives the share
-of attempts that ended on the relay. Several CSVs may be given; their rows are pooled.
+of attempts that ended on the relay (over UDP or TCP/TLS). Several CSVs may be given; their rows are pooled.
 
 Output: Markdown. With --readme, it replaces the text between
 `<!-- report:<section>:start -->` and `<!-- report:<section>:end -->` in that file; otherwise it is
@@ -73,7 +73,7 @@ def load(paths: list[str], time_col: str, by: str | None = None):
                 key = (row["natA"], row["natB"]) + ((row[by],) if by else ())
                 cell = cells[key]
                 cell[1] += 1
-                if (row.get("path") or "").strip() == "relay":
+                if (row.get("path") or "").strip().startswith("relay"):  # relay or relay-tls
                     cell[3] += 1
                 if row["success"].strip() == "1":
                     cell[0] += 1

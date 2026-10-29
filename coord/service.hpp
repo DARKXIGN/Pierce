@@ -25,6 +25,7 @@ struct ServiceOptions {
   std::vector<stun::Endpoint> relays;
   relay::Secret relay_secret;                // shared with the relays
   std::chrono::seconds relay_token_ttl{600};  // how long a relayed path outlives this server
+  std::uint16_t relay_tls_port = 0;          // the relays' TCP/TLS port, 0 = none
 };
 
 // Index of the relay with the lowest RTT_A + RTT_B. A relay one side did not reach is skipped;

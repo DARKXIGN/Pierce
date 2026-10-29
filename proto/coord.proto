@@ -75,6 +75,7 @@ message PunchIn {
 message Relay {
   bytes ipv4 = 1;  // 4 bytes, network order
   uint32 port = 2;
+  uint32 tls_port = 3;  // TCP/TLS fallback on the same IP; 0 = none
 }
 
 message RelayList {
