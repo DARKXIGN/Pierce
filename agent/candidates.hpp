@@ -33,8 +33,9 @@ std::string_view to_string(CandidateType t);
 std::uint32_t priority(CandidateType t, std::uint16_t local_preference = 65535);
 
 // Host candidates: every up, non-loopback IPv4 interface address, paired with `port` (the port of
-// the one UDP socket everything is sent from).
-std::vector<Candidate> host_candidates(std::uint16_t port);
+// the one UDP socket everything is sent from). `exclude` names an interface to leave out: our
+// own TUN device, whose address is only reachable through the tunnel we are trying to build.
+std::vector<Candidate> host_candidates(std::uint16_t port, std::string_view exclude = {});
 
 // Highest priority first; duplicates (same ip:port) removed, keeping the higher-priority one.
 void sort_and_dedupe(std::vector<Candidate>& cands);

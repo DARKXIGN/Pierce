@@ -81,6 +81,15 @@ class EndToEnd(unittest.TestCase):
         # 3 started on the relay, 2 upgraded; median of [5100, 10200] by nearest rank is 5100.
         self.assertIn("| symmetric-random × port-restricted | 3 | 67% [21–94] | 5100 / 10200 |", body)
 
+    def test_stage4_table(self):
+        rows = ["natA,natB,run,path,ping_avg_ms,ping_loss_pct,iperf_mbps",
+                "symmetric-random,port-restricted,1,direct,0.5,0,800",
+                "symmetric-random,port-restricted,2,relay,0.8,2,600",
+                "symmetric-random,port-restricted,3,direct,0.4,0,820"]
+        body = report.render_stage4([self.write("\n".join(rows) + "\n")])
+        self.assertIn("| symmetric-random × port-restricted | direct | 2 | 0.40 | 0% | 800 / 800 |", body)
+        self.assertIn("| symmetric-random × port-restricted | relay | 1 | 0.80 | 2% | 600 / 600 |", body)
+
     def test_pivot_by_column(self):
         rows = ["natA,natB,delay_ms,attempt,success,time_to_connect_ms,probes_sent,path"]
         for d in ("200", "0", "50"):

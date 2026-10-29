@@ -3,6 +3,7 @@
 //   pierce-agent --coord 203.0.113.10:50051 --stun 203.0.113.10:3478 --id A --peer B
 //                [--stun-alt-ip 203.0.113.11] [--stun-alt-port 3479] [--predict-window 32]
 //                [--birthday 256] [--retry-direct-ms 30000]
+//                [--tun pierce0 --wg-key PRIVATE --wg-peer PUBLIC]
 //                [--timeout-ms 3000] [--signal-timeout-ms 5000] [--interval-ms 20]
 //                [--hold SEC] [--keepalive-ms 25000]
 //
@@ -21,7 +22,11 @@
 // fails and the coordination server granted a relay, the agent binds to it and probes through it.
 // While relayed and holding (--hold), it asks for a new direct attempt every --retry-direct-ms
 // (0 = never) and reports "upgrade_ms=N" on stderr if one succeeds (time since the relay
-// connected). With --hold, stays connected for SEC seconds sending keepalives, which needs no
+// connected).
+// With --tun (stage 4) the agent runs the WireGuard data plane after connecting instead of probe
+// keepalives: TUN device <-> BoringTun <-> the socket and path the connection was made on, for
+// --hold seconds (0 = until killed). Keys are base64 (pierce-wgkey genkey / pubkey); the peer's
+// public key is exchanged in advance, never through the coordination server. With --hold, stays connected for SEC seconds sending keepalives, which needs no
 // coordination server, and reports "keepalive sent=N answered=M" on stderr.
 #include <grpcpp/grpcpp.h>
 
@@ -42,6 +47,11 @@
 #include "coord.grpc.pb.h"
 #include "stun/client.hpp"
 #include "stun/udp.hpp"
+#ifdef PIERCE_HAVE_WIREGUARD
+#include "wg/dataplane.hpp"
+#include "wg/tun.hpp"
+#include "wg/tunnel.hpp"
+#endif
 
 namespace {
 
@@ -55,7 +65,7 @@ namespace pb = pierce::coord;
       "usage: pierce-agent --coord HOST:PORT --stun IP:PORT --id ID --peer ID [--stun-alt-ip IP]\n"
       "                    [--stun-alt-port N] [--predict-window N] [--birthday N] [--timeout-ms N]\n"
       "                    [--signal-timeout-ms N] [--interval-ms N] [--hold SEC] [--keepalive-ms N]\n"
-      "                    [--retry-direct-ms N]\n",
+      "                    [--retry-direct-ms N] [--tun NAME --wg-key PRIVATE --wg-peer PUBLIC]\n",
       stderr);
   std::exit(2);
 }
@@ -144,6 +154,7 @@ int main(int argc, char** argv) try {
   int hold_s = 0;
   auto keepalive = std::chrono::milliseconds(25000);
   auto retry_direct = std::chrono::milliseconds(30000);
+  std::string tun_name, wg_key, wg_peer;
   for (int i = 1; i < argc; ++i) {
     std::string_view a = argv[i];
     auto value = [&] {
@@ -165,9 +176,30 @@ int main(int argc, char** argv) try {
     else if (a == "--hold") hold_s = std::atoi(value().c_str());
     else if (a == "--keepalive-ms") keepalive = ms();
     else if (a == "--retry-direct-ms") retry_direct = ms();
+    else if (a == "--tun") tun_name = value();
+    else if (a == "--wg-key") wg_key = value();
+    else if (a == "--wg-peer") wg_peer = value();
     else usage();
   }
   if (coord_addr.empty() || !stun_server || id.empty() || peer.empty() || id == peer) usage();
+  if (!tun_name.empty() && (wg_key.empty() || wg_peer.empty())) usage();
+#ifdef PIERCE_HAVE_WIREGUARD
+  // Open the TUN device and check the keys before anything else, so a missing permission or a
+  // typo in a key fails right away instead of after connecting.
+  std::optional<wg::Tun> tun;
+  std::optional<wg::Tunnel> tunnel;
+  if (!tun_name.empty()) {
+    tun.emplace(tun_name);
+    const auto ka = std::chrono::duration_cast<std::chrono::seconds>(keepalive).count();
+    tunnel.emplace(wg_key, wg_peer, static_cast<std::uint16_t>(std::clamp<long long>(ka, 0, 65535)));
+  }
+#else
+  if (!tun_name.empty()) {
+    std::fputs("pierce-agent: built without the WireGuard data plane (no cargo at build time)\n",
+               stderr);
+    return 2;
+  }
+#endif
 
   auto fail = [](int probes) {
     std::printf("0,,%d,none,\n", probes);
@@ -182,7 +214,7 @@ int main(int argc, char** argv) try {
   // Gather host and server-reflexive candidates and characterize the NAT's mapping. Run again
   // before each retry of the direct path, because the NAT's mappings may have changed since.
   auto gather = [&] {
-    mine = agent::host_candidates(sock.local_endpoint().port);
+    mine = agent::host_candidates(sock.local_endpoint().port, tun_name);
     my_nat = {};
     auto ask = [&](const stun::Endpoint& to) -> std::optional<stun::Endpoint> {
       if (auto r = stun::binding(sock, to, 0, std::chrono::milliseconds(200), 3)) return r->xor_mapped;
@@ -411,6 +443,24 @@ int main(int argc, char** argv) try {
   std::printf("%d,%lld,%d,%s,%s\n", via_relay ? 0 : 1, static_cast<long long>(ttc.count()), probes,
               path_name, stun::to_string(*res.path).c_str());
   std::fflush(stdout);
+
+#ifdef PIERCE_HAVE_WIREGUARD
+  // 5a. Stage 4: carry real traffic. WireGuard runs over the socket and path that just worked
+  //     (a birthday socket, the main socket, or the main socket via the relay).
+  if (tun) {
+    wg::DataPlane dp(*tun, *tunnel, active->socket(res.local), *res.path, plan->key);
+    std::fputs("dataplane up\n", stderr);
+    const auto until = hold_s > 0 ? Clock::now() + std::chrono::seconds(hold_s)
+                                  : Clock::time_point::max();
+    const auto st = dp.run(until);
+    std::fprintf(stderr, "dataplane to_peer=%llu from_peer=%llu dropped=%llu\n",
+                 static_cast<unsigned long long>(st.to_peer),
+                 static_cast<unsigned long long>(st.from_peer),
+                 static_cast<unsigned long long>(st.dropped));
+    stop_signaling();
+    return 0;
+  }
+#endif
 
   // 5. Optionally stay connected. Keepalives are peer to peer (or through the relay, which checks
   //    tokens on its own): the coordination server may die.

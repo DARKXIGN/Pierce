@@ -1,0 +1,17 @@
+# Builds Cloudflare's BoringTun (userspace WireGuard) as a static library with its C API, for
+# wg/tunnel.cpp. We never implement WireGuard's cryptography ourselves.
+[package]
+name = "pierce-boringtun"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+path = "lib.rs"
+
+[dependencies]
+boringtun = { version = "=0.6.0", default-features = false, features = ["ffi-bindings"] }
+
+[profile.release]
+panic = "abort"  # a Rust panic must not unwind into C++ frames

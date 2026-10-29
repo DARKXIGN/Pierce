@@ -17,6 +17,10 @@ With --upgrade the input is results/stage3_upgrade.csv (natA,natB,attempt,initia
 and the output is one row per NAT pair: how many connections started on the relay, how many of
 those upgraded to a direct path [Wilson 95% CI], and median / p95 upgrade time.
 
+With --stage4 the input is results/stage4_lab.csv (natA,natB,run,path,ping_avg_ms,ping_loss_pct,
+iperf_mbps) and the output has one row per NAT pair and path: runs, median ping, worst loss,
+median and minimum iperf3 throughput.
+
 With --by COLUMN the table has one row per NAT pair that occurs in the data and one column per
 value of COLUMN (e.g. the extra delay), instead of the NAT A x NAT B grid.
 
@@ -164,6 +168,31 @@ def render_upgrade(paths: list[str]) -> str:
     return "\n".join(lines)
 
 
+def render_stage4(paths: list[str]) -> str:
+    rows = defaultdict(list)  # (natA, natB, path) -> [(ping, loss, mbps)]
+    for path in paths:
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                def num(k):
+                    v = (row.get(k) or "").strip()
+                    return float(v) if v else None
+                rows[(row["natA"], row["natB"], row["path"])].append(
+                    (num("ping_avg_ms"), num("ping_loss_pct"), num("iperf_mbps")))
+    lines = ["| NAT A × NAT B | path | runs | ping, median ms | loss, worst | iperf3, median / min Mbit/s |",
+             "|---|---|---|---|---|---|"]
+    order = {t: i for i, t in enumerate(NAT_TYPES)}
+    for key in sorted(rows, key=lambda k: (order.get(k[0], 99), order.get(k[1], 99), k[2])):
+        runs = rows[key]
+        pings = sorted(r[0] for r in runs if r[0] is not None)
+        losses = [r[1] for r in runs if r[1] is not None]
+        rates = sorted(r[2] for r in runs if r[2] is not None)
+        ping = f"{percentile(pings, 50):.2f}" if pings else "—"
+        loss = f"{max(losses):g}%" if losses else "—"
+        rate = f"{percentile(rates, 50):.0f} / {rates[0]:.0f}" if rates else "—"
+        lines.append(f"| {key[0]} × {key[1]} | {key[2]} | {len(runs)} | {ping} | {loss} | {rate} |")
+    return "\n".join(lines)
+
+
 def splice(readme: str, section: str, body: str) -> str:
     start, end = f"<!-- report:{section}:start -->", f"<!-- report:{section}:end -->"
     pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
@@ -181,10 +210,13 @@ def main() -> None:
     ap.add_argument("--time-label", default="Time to connect")
     ap.add_argument("--by", help="pivot on this column instead of the NAT A x NAT B grid")
     ap.add_argument("--upgrade", action="store_true", help="input is stage3_upgrade.csv")
+    ap.add_argument("--stage4", action="store_true", help="input is stage4_lab.csv")
     args = ap.parse_args()
 
     if args.upgrade:
         body = render_upgrade(args.csv)
+    elif args.stage4:
+        body = render_stage4(args.csv)
     else:
         cells, has_time = load(args.csv, args.time_col, args.by)
         if not cells:

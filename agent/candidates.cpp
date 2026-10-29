@@ -32,7 +32,7 @@ std::uint32_t priority(CandidateType t, std::uint16_t local_preference) {
   return (type_pref << 24) | (std::uint32_t{local_preference} << 8) | 255;
 }
 
-std::vector<Candidate> host_candidates(std::uint16_t port) {
+std::vector<Candidate> host_candidates(std::uint16_t port, std::string_view exclude) {
   std::vector<Candidate> out;
   ifaddrs* list = nullptr;
   if (getifaddrs(&list) != 0) return out;
@@ -40,6 +40,7 @@ std::vector<Candidate> host_candidates(std::uint16_t port) {
   for (auto* ifa = list; ifa; ifa = ifa->ifa_next) {
     if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
     if (!(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) continue;
+    if (!exclude.empty() && exclude == ifa->ifa_name) continue;
     Endpoint ep;
     std::memcpy(ep.ipv4.data(), &reinterpret_cast<sockaddr_in*>(ifa->ifa_addr)->sin_addr, 4);
     ep.port = port;

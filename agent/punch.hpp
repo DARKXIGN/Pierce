@@ -56,6 +56,8 @@ class Puncher {
                  std::chrono::milliseconds interval);
 
   int probes_sent() const { return sent_; }
+  // The local socket a PunchResult refers to (0 = main, else a birthday socket).
+  stun::UdpSocket& socket(std::size_t local) { return *socks_.at(local); }
   const std::vector<Candidate>& remote() const { return remote_; }
 
  private:

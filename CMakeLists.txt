@@ -72,6 +72,43 @@ target_link_libraries(pierce-coord PRIVATE coord_core)
 add_executable(pierce-agent agent/main.cpp)
 target_link_libraries(pierce-agent PRIVATE agent_core coord_proto)
 
+# Stage 4: WireGuard data plane through BoringTun (Rust, built with cargo as a static library).
+# Optional, so stages 1-3 still build on a machine without a Rust toolchain.
+find_program(CARGO cargo HINTS $ENV{HOME}/.cargo/bin)
+option(PIERCE_WIREGUARD "Build the WireGuard data plane (needs cargo for BoringTun)" ON)
+if(PIERCE_WIREGUARD AND CARGO)
+  set(BT_DIR ${CMAKE_SOURCE_DIR}/third_party/boringtun)
+  set(BT_TARGET_DIR ${CMAKE_BINARY_DIR}/cargo)
+  set(BT_LIB ${BT_TARGET_DIR}/release/libpierce_boringtun.a)
+  add_custom_command(
+    OUTPUT ${BT_LIB}
+    # env --unset: cargo would complain about make's jobserver flags it cannot use.
+    COMMAND ${CMAKE_COMMAND} -E env --unset=MAKEFLAGS --unset=MFLAGS
+            ${CARGO} build --release --locked --manifest-path ${BT_DIR}/Cargo.toml
+            --target-dir ${BT_TARGET_DIR}
+    DEPENDS ${BT_DIR}/Cargo.toml ${BT_DIR}/Cargo.lock ${BT_DIR}/lib.rs
+    COMMENT "Building BoringTun with cargo")
+  add_custom_target(boringtun_build DEPENDS ${BT_LIB})
+  find_package(Threads REQUIRED)
+  add_library(boringtun STATIC IMPORTED)
+  set_target_properties(boringtun PROPERTIES IMPORTED_LOCATION ${BT_LIB})
+  # A Rust static library needs these system libraries at link time.
+  target_link_libraries(boringtun INTERFACE Threads::Threads ${CMAKE_DL_LIBS} m)
+  add_dependencies(boringtun boringtun_build)
+
+  add_library(wg_core STATIC wg/tunnel.cpp wg/tun.cpp wg/dataplane.cpp)
+  target_include_directories(wg_core PUBLIC ${CMAKE_SOURCE_DIR})
+  target_link_libraries(wg_core PUBLIC boringtun agent_core OpenSSL::Crypto)
+  add_executable(pierce-wgkey wg/keytool.cpp)
+  target_link_libraries(pierce-wgkey PRIVATE wg_core)
+  target_link_libraries(pierce-agent PRIVATE wg_core)
+  target_compile_definitions(pierce-agent PRIVATE PIERCE_HAVE_WIREGUARD=1)
+  set(PIERCE_HAVE_WIREGUARD ON)
+else()
+  message(WARNING "cargo not found (or PIERCE_WIREGUARD=OFF): building without the WireGuard "
+                  "data plane. Install Rust with rustup to enable it.")
+endif()
+
 enable_testing()
 add_executable(stun_tests tests/stun_message_test.cpp tests/stun_detector_test.cpp)
 target_link_libraries(stun_tests PRIVATE stun GTest::gtest_main)
@@ -98,3 +135,9 @@ add_test(NAME coord_tests COMMAND coord_tests)
 add_executable(relay_tests tests/relay_test.cpp)
 target_link_libraries(relay_tests PRIVATE relay_core GTest::gtest_main)
 add_test(NAME relay_tests COMMAND relay_tests)
+
+if(PIERCE_HAVE_WIREGUARD)
+  add_executable(wg_tests tests/wg_test.cpp)
+  target_link_libraries(wg_tests PRIVATE wg_core GTest::gtest_main)
+  add_test(NAME wg_tests COMMAND wg_tests)
+endif()
