@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression guard: compare a short CI run against the committed full measurement.
 
-  lab/ci_check.py REFERENCE.csv RUN.csv [REFERENCE.csv RUN.csv ...]
+  lab/ci_check.py REFERENCE.csv RUN.csv [REFERENCE.csv RUN.csv ...] [--all-direct RUN.csv ...]
 
 Both files are per-attempt CSVs with natA, natB, success (and optionally path). For every NAT
 combination the reference gives a success rate from >=100 attempts; the CI run has only a few
@@ -13,6 +13,10 @@ combination the reference gives a success rate from >=100 attempts; the CI run h
 With 10 attempts against a 100% reference that tolerates two failures and fails on three. Cells
 that got better are fine. If the run has a path column, any attempt with path "none" (neither
 direct nor relay) also fails the check, when the reference had none in that cell.
+
+--all-direct checks runs that have no committed reference yet against "every cell 100/100",
+except rows whose NAT A label ends in "-A-only" (IPv6 on one side only): those are expected to
+fall back to IPv4, so only "reached the peer at all" is checked for them.
 
 Exit code 0 if everything passes, 1 otherwise; prints one line per cell that failed.
 """
@@ -45,8 +49,8 @@ def load(path: str):
     return cells
 
 
-def check(reference: str, run: str) -> list[str]:
-    ref, got = load(reference), load(run)
+def check(reference: str, run: str, ref_cells=None) -> list[str]:
+    ref, got = (ref_cells if ref_cells is not None else load(reference)), load(run)
     problems = []
     for key, (k, n, none) in sorted(got.items()):
         if key not in ref:
@@ -66,15 +70,22 @@ def check(reference: str, run: str) -> list[str]:
 
 def main() -> None:
     args = sys.argv[1:]
-    if not args or len(args) % 2:
+    all_direct = []
+    if "--all-direct" in args:
+        i = args.index("--all-direct")
+        args, all_direct = args[:i], args[i + 1:]
+    if len(args) % 2 or not (args or all_direct):
         sys.exit(__doc__.strip().splitlines()[2])
     problems = []
     for reference, run in zip(args[0::2], args[1::2]):
         problems += check(reference, run)
+    for run in all_direct:
+        ideal = {k: [0 if k[0].endswith("-A-only") else 100, 100, 0] for k in load(run)}
+        problems += check("100/100 everywhere", run, ref_cells=ideal)
     for p in problems:
         print("FAIL", p)
     if not problems:
-        print(f"OK: {len(args) // 2} run(s) consistent with the reference measurements")
+        print(f"OK: {len(args) // 2 + len(all_direct)} run(s) consistent with the reference measurements")
     sys.exit(1 if problems else 0)
 
 

@@ -30,7 +30,7 @@ message Candidate {
     PORTMAPPED = 2;  // opened on request by the peer's router (UPnP / NAT-PMP / PCP)
   }
   Type type = 1;
-  bytes ipv4 = 2;  // 4 bytes, network order
+  bytes ip = 2;  // 4 bytes (IPv4) or 16 (IPv6), network order
   uint32 port = 3;
   uint32 priority = 4;
 }
@@ -74,7 +74,7 @@ message PunchIn {
 }
 
 message Relay {
-  bytes ipv4 = 1;  // 4 bytes, network order
+  bytes ip = 1;  // 4 bytes (IPv4) or 16 (IPv6), network order
   uint32 port = 2;
   uint32 tls_port = 3;  // TCP/TLS fallback on the same IP; 0 = none
 }

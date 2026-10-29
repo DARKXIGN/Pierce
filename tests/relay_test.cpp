@@ -60,7 +60,8 @@ TEST(RelayTable, RebindReplacesQuietestSlot) {
   relay::Table t(kSecret, std::chrono::seconds(60));
   t.handle(relay::bind_message(token(1)), kA, kNow);
   t.handle(relay::bind_message(token(1)), kB, kNow + 5);
-  const Endpoint a2{kA.ipv4, 4001};  // A's NAT gave it a new port
+  Endpoint a2 = kA;  // A's NAT gave it a new port
+  a2.port = 4001;
   t.handle(relay::bind_message(token(1)), a2, kNow + 10);
   EXPECT_EQ(t.handle(kData, kB, kNow + 10)->to, a2);
   EXPECT_FALSE(t.handle(kData, kA, kNow + 10));  // old endpoint no longer bound

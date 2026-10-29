@@ -149,3 +149,55 @@ TEST(Puncher, IntervalShrinksWithManyPairs) {
   // 100 pairs, pass 500 ms -> 5 ms per probe -> about 100 probes in 500 ms (20 ms would give 25).
   EXPECT_GT(a.probes_sent(), 60);
 }
+
+namespace {
+bool have_ipv6() {
+  try {
+    stun::UdpSocket s(Endpoint::v6({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, 0));  // [::1]
+    return true;
+  } catch (const std::system_error&) {
+    return false;  // kernel without IPv6 (e.g. booted with ipv6.disable=1)
+  }
+}
+const Endpoint kLoop6 = Endpoint::v6({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, 0);
+}  // namespace
+
+// The agent's default socket is dual-stack: one socket reaches an IPv4 and an IPv6 peer.
+TEST(DualStack, OneSocketTalksToBothFamilies) {
+  if (!have_ipv6()) GTEST_SKIP() << "no IPv6 in this kernel";
+  stun::UdpSocket dual;  // "::", IPV6_V6ONLY off
+  ASSERT_EQ(dual.family(), AF_INET6);
+  stun::UdpSocket peer4(Endpoint{{127, 0, 0, 1}, 0}), peer6(kLoop6);
+  const std::vector<std::uint8_t> hello = {1, 2, 3};
+  const auto dual_port = dual.local_endpoint().port;
+  peer4.send_to(hello, Endpoint{{127, 0, 0, 1}, dual_port});
+  peer6.send_to(hello, Endpoint::v6(kLoop6.ip, dual_port));
+  auto a = dual.receive(std::chrono::milliseconds(500)), b = dual.receive(std::chrono::milliseconds(500));
+  ASSERT_TRUE(a && b);
+  // The IPv4 sender shows up in mapped form, i.e. as the same Endpoint an IPv4 socket would give.
+  EXPECT_TRUE(a->from == peer4.local_endpoint() || b->from == peer4.local_endpoint());
+  EXPECT_TRUE(a->from == peer6.local_endpoint() || b->from == peer6.local_endpoint());
+}
+
+TEST(DualStack, PunchOverIpv6) {
+  if (!have_ipv6()) GTEST_SKIP() << "no IPv6 in this kernel";
+  stun::UdpSocket sa(kLoop6), sb(kLoop6);
+  agent::Puncher a(sa, kKey, {host(sb.local_endpoint())});
+  agent::Puncher b(sb, kKey, {host(sa.local_endpoint())});
+  agent::PunchOptions opt;
+  opt.timeout = std::chrono::milliseconds(1000);
+  auto fb = std::async(std::launch::async, [&] { return b.connect(opt); });
+  const auto ra = a.connect(opt);
+  ASSERT_TRUE(ra.success);
+  ASSERT_TRUE(fb.get().success);
+  EXPECT_FALSE(ra.path->is_v4());
+}
+
+TEST(DualStack, FallsBackToIpv4WithoutIpv6) {
+  // Whatever the kernel, the default socket works and can reach IPv4.
+  stun::UdpSocket dual, peer4(Endpoint{{127, 0, 0, 1}, 0});
+  dual.send_to(std::vector<std::uint8_t>{9}, peer4.local_endpoint());
+  auto d = peer4.receive(std::chrono::milliseconds(500));
+  ASSERT_TRUE(d);
+  EXPECT_EQ(d->bytes[0], 9);
+}

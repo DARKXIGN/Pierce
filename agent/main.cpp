@@ -83,7 +83,7 @@ pb::Candidate to_proto(const Candidate& c) {
   p.set_type(c.type == CandidateType::ServerReflexive ? pb::Candidate::SRFLX
              : c.type == CandidateType::PortMapped    ? pb::Candidate::PORTMAPPED
                                                       : pb::Candidate::HOST);
-  p.set_ipv4(std::string(c.ep.ipv4.begin(), c.ep.ipv4.end()));
+  p.set_ip(stun::address_bytes(c.ep));
   p.set_port(c.ep.port);
   p.set_priority(c.priority);
   return p;
@@ -116,13 +116,14 @@ agent::NatInfo from_proto(const pb::NatInfo& p) {
 }
 
 std::optional<Candidate> from_proto(const pb::Candidate& p) {
-  if (p.ipv4().size() != 4 || p.port() == 0 || p.port() > 65535) return std::nullopt;
+  if (p.port() == 0 || p.port() > 65535) return std::nullopt;
+  auto ep = stun::from_address_bytes(p.ip(), static_cast<std::uint16_t>(p.port()));
+  if (!ep) return std::nullopt;
   Candidate c;
+  c.ep = *ep;
   c.type = p.type() == pb::Candidate::SRFLX        ? CandidateType::ServerReflexive
            : p.type() == pb::Candidate::PORTMAPPED ? CandidateType::PortMapped
                                                    : CandidateType::Host;
-  std::copy(p.ipv4().begin(), p.ipv4().end(), c.ep.ipv4.begin());
-  c.ep.port = static_cast<std::uint16_t>(p.port());
   c.priority = p.priority();
   return c;
 }
@@ -146,11 +147,8 @@ struct Signal {
 };
 
 std::optional<stun::Endpoint> from_proto(const pb::Relay& r) {
-  if (r.ipv4().size() != 4 || r.port() == 0 || r.port() > 65535) return std::nullopt;
-  stun::Endpoint ep;
-  std::copy(r.ipv4().begin(), r.ipv4().end(), ep.ipv4.begin());
-  ep.port = static_cast<std::uint16_t>(r.port());
-  return ep;
+  if (r.port() == 0 || r.port() > 65535) return std::nullopt;
+  return stun::from_address_bytes(r.ip(), static_cast<std::uint16_t>(r.port()));
 }
 
 }  // namespace
@@ -265,7 +263,9 @@ int main(int argc, char** argv) try {
       // Same socket, two more destinations: does the public port change, and how?
       if (stun_alt_ip) {
         auto p2 = ask({*stun_alt_ip, stun_server->port});
-        auto p3 = ask({stun_server->ipv4, stun_alt_port});
+        auto alt_port = *stun_server;  // same IP, other port
+        alt_port.port = stun_alt_port;
+        auto p3 = ask(alt_port);
         if (p2 && p3) my_nat = agent::characterize(srflx->port, p2->port, p3->port);
       }
     } else {
@@ -426,12 +426,16 @@ int main(int argc, char** argv) try {
     });
     std::optional<stun::Endpoint> birthday_target;
     if (peer_srflx != peer_cands.end()) {
-      const auto peer_ip = peer_srflx->ep.ipv4;
+      const auto peer_ip = peer_srflx->ep.v4();
       const auto peer_srflx_ep = peer_srflx->ep;  // the insertions below invalidate peer_srflx
       // Peer behind a sequential NAT: probe the ports it will use next.
       const bool we_seq = my_nat.mapping == Mapping::SymmetricSequential;
+      // The offset counts the peer's probes that go through our sequential NAT: those to our
+      // IPv4 candidates. Probes to IPv6 candidates bypass the IPv4 NAT and use up no port.
+      const auto via_nat = static_cast<std::size_t>(std::count_if(
+          mine.begin(), mine.end(), [](const Candidate& c) { return c.ep.is_v4(); }));
       auto predicted =
-          agent::predicted_candidates(peer_ip, p.peer_nat, we_seq, mine.size(), predict_window);
+          agent::predicted_candidates(peer_ip, p.peer_nat, we_seq, via_nat, predict_window);
       peer_cands.insert(peer_cands.end(), predicted.begin(), predicted.end());
       // Random mapping on one side, cone on the other: birthday probing.
       if (my_nat.mapping == Mapping::EndpointIndependent &&
@@ -473,7 +477,9 @@ int main(int argc, char** argv) try {
       relay_at = relay_ep;
     } else if (relay_tls_port != 0) {
       try {
-        tls_shim.emplace(stun::Endpoint{relay_ep->ipv4, relay_tls_port}, std::chrono::milliseconds(2000));
+        auto tls_at = *relay_ep;  // same IP, the TLS port
+        tls_at.port = relay_tls_port;
+        tls_shim.emplace(tls_at, std::chrono::milliseconds(2000));
         if (agent::bind_relay(sock, tls_shim->local(), relay_token, std::chrono::milliseconds(300), 5))
           relay_at = tls_shim->local();
       } catch (const std::exception& e) {

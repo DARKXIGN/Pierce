@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "coord/timing.hpp"
+#include "stun/udp.hpp"
 
 namespace coord {
 
@@ -54,14 +55,12 @@ namespace {
 std::string candidates_text(const Candidates& c) {
   std::string out;
   for (const auto& cand : c.candidates()) {
-    const auto& ip = cand.ipv4();
-    if (ip.size() != 4) continue;
-    char buf[48];
-    std::snprintf(buf, sizeof buf, "%s%s %u.%u.%u.%u:%u", out.empty() ? "" : ", ",
-                  cand.type() == pierce::coord::Candidate::SRFLX ? "srflx" : "host",
-                  std::uint8_t(ip[0]), std::uint8_t(ip[1]), std::uint8_t(ip[2]),
-                  std::uint8_t(ip[3]), cand.port());
-    out += buf;
+    auto ep = stun::from_address_bytes(cand.ip(), static_cast<std::uint16_t>(cand.port()));
+    if (!ep) continue;
+    const char* type = cand.type() == pierce::coord::Candidate::SRFLX        ? "srflx"
+                       : cand.type() == pierce::coord::Candidate::PORTMAPPED ? "portmap"
+                                                                              : "host";
+    out += (out.empty() ? "" : ", ") + std::string(type) + " " + stun::to_string(*ep);
   }
   return out;
 }
@@ -74,7 +73,7 @@ std::uint64_t random_nonce() {
 
 pierce::coord::Relay to_proto(const stun::Endpoint& ep) {
   pierce::coord::Relay r;
-  r.set_ipv4(std::string(ep.ipv4.begin(), ep.ipv4.end()));
+  r.set_ip(stun::address_bytes(ep));
   r.set_port(ep.port);
   return r;
 }

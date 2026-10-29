@@ -6,6 +6,7 @@
 #   sudo ./lab/run_stage2.sh stage3   [results_dir]   # with stage 3 techniques -> stage3_improved.csv
 #   sudo ./lab/run_stage2.sh upgrade  [results_dir]   # relay -> direct upgrades -> stage3_upgrade.csv
 #   sudo ./lab/run_stage2.sh portmap  [results_dir]   # router A does port mapping -> stage3_portmap.csv
+#   sudo ./lab/run_stage2.sh ipv6     [results_dir]   # both sides dual-stack -> stage3_ipv6.csv
 #
 # baseline and delay run plain stage 2 hole punching. stage3 runs the same 5×5 matrix with the
 # stage 3 techniques switched on: NAT mapping characterization, port prediction, birthday
@@ -15,6 +16,10 @@
 # ./lab/get_miniupnpd.sh): rows "<type>+portmap" for every nftables NAT type (the userspace NAT
 # has no port mapping), then one row per protocol on its own, "symmetric-random+pcp" etc., against
 # symmetric-random.
+# ipv6 is stage3 with IPV6=AB (both sides also have IPv6, not NATed, only filtered): rows
+# "<type>+ipv6", then "symmetric-random+ipv6-A-only" (only A has IPv6, so the agents must fall
+# back to IPv4, here the relay). Needs a kernel with IPv6. The summary also counts how many
+# direct paths went over IPv6.
 # upgrade holds each connection for UPGRADE_HOLD seconds (default 16) and lets a relayed
 # connection retry the direct path every UPGRADE_RETRY_MS (default 5000; 30000 in production,
 # shortened so the experiment fits in minutes), recording how long until it upgraded.
@@ -78,6 +83,7 @@ attempt() {
   local pa=$!
   ns_exec "$NS_PEER_B" "$build/pierce-agent" "${args[@]}" --id B --peer A >"$rb" 2>/dev/null
   wait "$pa" || true  # a crashed agent still printed a failure line
+  [[ -n ${remotes:-} ]] && cut -d, -f5 "$ra" >> "$remotes"  # A's remote end of the path
   # Each agent printed "direct,time_ms,probes,path,remote".
   paste -d, "$ra" "$rb" | awk -F, -v p="$prefix" '{
       ok = ($1 == 1 && $6 == 1)
@@ -112,8 +118,10 @@ run_combo() {
     '$1==a && $2==b && (d=="" || $3==d) && $(NF-3)==1' "$out" | wc -l)
   relayed=$(awk -F, -v a="$la" -v b="$b" -v d="$delay" \
     '$1==a && $2==b && (d=="" || $3==d) && $NF ~ /^relay/' "$out" | wc -l)
-  printf '%-28s %-21s %s%s/%s direct%s\n' "$la" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts" \
-    "$([[ $use_relays == 1 ]] && echo ", $relayed relay")"
+  local v6=""
+  if [[ -n ${remotes:-} ]]; then v6=", $(grep -c '^\[' "$remotes") over IPv6"; : > "$remotes"; fi
+  printf '%-28s %-21s %s%s/%s direct%s%s\n' "$la" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts" \
+    "$([[ $use_relays == 1 ]] && echo ", $relayed relay")" "$v6"
 }
 
 # upgrade_attempt <a> <b> <i>: one held connection; appends "a,b,i,initial_path,upgrade_ms".
@@ -139,6 +147,22 @@ agent_extra=()
 use_relays=0
 label_a=""
 case $mode in
+  ipv6)
+    [[ -e /proc/net/if_inet6 ]] || { echo "this kernel has no IPv6" >&2; exit 1; }
+    use_relays=1
+    agent_extra=(--stun-alt-ip "$OBS_IP2" --stun-alt-port 3479)
+    out=$results/stage3_ipv6.csv
+    echo "natA,natB,attempt,success,time_to_connect_ms,probes_sent,path" > "$out"
+    remotes=$(mktemp)
+    export IPV6=AB
+    for a in "${NAT_TYPES[@]}"; do
+      label_a="$a+ipv6"
+      for b in "${NAT_TYPES[@]}"; do run_combo "$a" "$b"; done
+    done
+    export IPV6=A
+    label_a="symmetric-random+ipv6-A-only"
+    run_combo symmetric-random symmetric-random
+    rm -f "$remotes" ;;
   portmap)
     [[ -x $build/miniupnpd/usr/sbin/miniupnpd ]] || { echo "run ./lab/get_miniupnpd.sh first" >&2; exit 1; }
     use_relays=1

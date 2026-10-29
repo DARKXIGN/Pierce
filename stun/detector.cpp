@@ -48,7 +48,8 @@ Observations Detector::observe() {
   Observations o;
   const Endpoint primary = cfg_.server;
   const Endpoint alt_ip{cfg_.alt_ip, primary.port};
-  const Endpoint alt_port{primary.ipv4, cfg_.alt_port};
+  Endpoint alt_port = primary;  // same IP, other port
+  alt_port.port = cfg_.alt_port;
 
   // 1. Mapping: one socket, three destinations.
   auto& s = fresh_socket();

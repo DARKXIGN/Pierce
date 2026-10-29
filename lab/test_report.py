@@ -141,6 +141,21 @@ class CiCheck(unittest.TestCase):
         self.assertEqual(len(ci_check.check(
             ref, self.write(self.rows("symmetric-random", "port-restricted", 1, 10)))), 1)
 
+    def test_all_direct_ideal_reference(self):
+        run = self.write(self.rows("full", "full", 9, 10) + self.rows("full", "restricted", 6, 10))
+        ideal = {k: [100, 100, 0] for k in ci_check.load(run)}
+        problems = ci_check.check("ideal", run, ref_cells=ideal)
+        self.assertEqual(len(problems), 1)  # 9/10 is fine, 6/10 is not
+        self.assertIn("full x restricted", problems[0])
+
+    def test_all_direct_cli_allows_a_only_rows(self):
+        run = self.write(self.rows("full+ipv6", "full", 10, 10) +
+                         self.rows("symmetric-random+ipv6-A-only", "symmetric-random", 0, 10))
+        with self.assertRaises(SystemExit) as e:
+            sys.argv = ["ci_check.py", "--all-direct", run]
+            ci_check.main()
+        self.assertEqual(e.exception.code, 0)
+
     def test_lost_relay_fallback_fails(self):
         ref = self.write(self.rows("symmetric-random", "symmetric-random", 0, 100))
         run = self.write(self.rows("symmetric-random", "symmetric-random", 0, 10, fail_path="none"))

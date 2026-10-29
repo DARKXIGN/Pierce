@@ -17,7 +17,7 @@ void DataPlane::send(std::span<const std::uint8_t> datagram) {
 }
 
 void DataPlane::from_network(const stun::Datagram& d) {
-  if (d.from.ipv4 != peer_.ipv4) {
+  if (!d.from.same_ip(peer_)) {
     ++stats_.dropped;
     return;
   }

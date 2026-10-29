@@ -40,15 +40,14 @@ TlsServer::TlsServer(const stun::Endpoint& listen, const std::string& cert_pem,
   // std::vector we erase from).
   SSL_CTX_set_mode(ctx_, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
-  listen_fd_ = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  const int family = listen.is_v4() ? AF_INET : AF_INET6;
+  listen_fd_ = socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (listen_fd_ < 0) throw std::system_error(errno, std::generic_category(), "socket");
   int one = 1;
   setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-  sockaddr_in sa{};
-  sa.sin_family = AF_INET;
-  sa.sin_port = htons(listen.port);
-  std::memcpy(&sa.sin_addr, listen.ipv4.data(), 4);
-  if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&sa), sizeof sa) < 0 || ::listen(listen_fd_, 64) < 0)
+  const auto sa = stun::to_sockaddr(listen, family);
+  if (bind(listen_fd_, reinterpret_cast<const sockaddr*>(&sa.storage), sa.len) < 0 ||
+      ::listen(listen_fd_, 64) < 0)
     throw std::system_error(errno, std::generic_category(), "bind/listen " + stun::to_string(listen));
   set_nonblocking(listen_fd_);
 }

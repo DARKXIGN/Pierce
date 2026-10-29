@@ -27,7 +27,7 @@ TEST(Predict, ConeSideProbesTheNextPorts) {
   ASSERT_EQ(c.size(), 4u);
   EXPECT_EQ(c[0].ep.port, 20003);
   EXPECT_EQ(c[3].ep.port, 20006);
-  EXPECT_EQ(c[0].ep.ipv4, (std::array<std::uint8_t, 4>{203, 0, 113, 1}));
+  EXPECT_EQ(c[0].ep.v4(), (std::array<std::uint8_t, 4>{203, 0, 113, 1}));
   EXPECT_GT(c[0].priority, c[1].priority);  // k = 1 first
   EXPECT_LT(c[0].priority, agent::priority(agent::CandidateType::ServerReflexive));
 }
@@ -65,7 +65,7 @@ TEST(Guess, DistinctPortsOnPeerIpCapped) {
   ASSERT_EQ(c.size(), 256u);
   std::set<std::uint16_t> ports;
   for (const auto& g : c) {
-    EXPECT_EQ(g.ep.ipv4, (std::array<std::uint8_t, 4>{198, 51, 100, 9}));
+    EXPECT_EQ(g.ep.v4(), (std::array<std::uint8_t, 4>{198, 51, 100, 9}));
     EXPECT_GE(g.ep.port, 1024);
     ports.insert(g.ep.port);
   }

@@ -33,6 +33,16 @@ NAT_B_WAN_IP=192.0.32.2
 OBS_IP1=192.0.32.10
 OBS_IP2=192.0.32.11
 
+# IPv6 (setup.sh with IPV6=A|B|AB): no NAT, as with most IPv6 deployments; the routers only
+# filter (stateful: replies to what the LAN sent). Documentation prefix 2001:db8::/32.
+PEER_A_IP6=2001:db8:1::2
+PEER_B_IP6=2001:db8:2::2
+NAT_A_LAN_IP6=2001:db8:1::1
+NAT_B_LAN_IP6=2001:db8:2::1
+NAT_A_WAN_IP6=2001:db8:100::1
+NAT_B_WAN_IP6=2001:db8:100::2
+OBS_IP6=2001:db8:100::10
+
 NAT_TYPES=(full restricted port-restricted symmetric-random symmetric-sequential)
 
 need_root() {

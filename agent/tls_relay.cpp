@@ -21,7 +21,8 @@ namespace agent {
 
 TlsRelayShim::TlsRelayShim(const stun::Endpoint& relay_tls, std::chrono::milliseconds timeout)
     : udp_(stun::Endpoint{{127, 0, 0, 1}, 0}) {
-  tcp_ = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  const int family = relay_tls.is_v4() ? AF_INET : AF_INET6;
+  tcp_ = socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (tcp_ < 0) throw std::system_error(errno, std::generic_category(), "socket");
   timeval tv{static_cast<time_t>(timeout.count() / 1000),
              static_cast<suseconds_t>((timeout.count() % 1000) * 1000)};
@@ -29,11 +30,8 @@ TlsRelayShim::TlsRelayShim(const stun::Endpoint& relay_tls, std::chrono::millise
   setsockopt(tcp_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
   int one = 1;
   setsockopt(tcp_, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-  sockaddr_in sa{};
-  sa.sin_family = AF_INET;
-  sa.sin_port = htons(relay_tls.port);
-  std::memcpy(&sa.sin_addr, relay_tls.ipv4.data(), 4);
-  if (connect(tcp_, reinterpret_cast<sockaddr*>(&sa), sizeof sa) < 0) {
+  const auto sa = stun::to_sockaddr(relay_tls, family);
+  if (connect(tcp_, reinterpret_cast<const sockaddr*>(&sa.storage), sa.len) < 0) {
     const int e = errno;
     close(tcp_);
     throw std::system_error(e, std::generic_category(), "connect " + stun::to_string(relay_tls));

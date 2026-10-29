@@ -96,6 +96,7 @@ Same 5×5 matrix with the stage 3 techniques on. Success is still the **direct**
 - **Relay**: after 3 s the agents bind to the relay the coordination server picked (lowest RTT_A + RTT_B) with a shared token and probe through it.
 - **Triggered checks** on every incoming request (also a change to the stage 2 code path).
 - **Port mapping** (separate table below): PCP (own implementation), NAT-PMP (libnatpmp), UPnP IGD (miniupnpc).
+- **IPv6 candidates** (separate table below): dual-stack socket, IPv6 host candidates.
 
 <!-- report:stage3:start -->
 Success rate [Wilson 95% CI], n = 100 attempts per cell.
@@ -160,6 +161,16 @@ Time to connect, median / p95 in ms (successful attempts only).
 <!-- report:portmap:end -->
 
 When no router answers, the probes fail at once with ICMP port unreachable; a router that silently drops them costs up to 500 ms before signaling goes on without a mapping.
+
+#### IPv6
+
+The agent's one socket is dual-stack, and IPv6 interface addresses become host candidates (preferred over IPv4). With IPv6 there is usually no NAT, only the router's stateful firewall, and simultaneous probes open that like a port-restricted cone, so the symmetric IPv4 NATs stop mattering once both sides have IPv6. The lab's `IPV6=AB` gives both sides IPv6 behind such a firewall; `symmetric-random+ipv6-A-only` has it on one side only and must fall back to IPv4.
+
+<!-- report:ipv6:start -->
+Not measured in the development sandbox (its kernel has IPv6 disabled); CI runs it with 10 attempts per combination. Full run: `sudo ./lab/run_stage2.sh ipv6` on OCI.
+<!-- report:ipv6:end -->
+
+Implemented and tested in the lab only: the author's home connection has no IPv6.
 
 #### Relay → direct upgrade
 
@@ -232,10 +243,12 @@ sudo ./lab/run_stage2.sh stage3             # stage 3 techniques + relay -> resu
 sudo ./lab/run_stage2.sh upgrade            # relay -> direct upgrades -> results/stage3_upgrade.csv
 ./lab/get_miniupnpd.sh                      # once: unpack miniupnpd for the lab (not installed)
 sudo ./lab/run_stage2.sh portmap            # router A does port mapping -> results/stage3_portmap.csv
+sudo ./lab/run_stage2.sh ipv6               # both sides dual-stack -> results/stage3_ipv6.csv (needs IPv6 in the kernel)
 sudo ./lab/check_coord_outage.sh symmetric-random symmetric-random   # relayed path survives too
 python3 lab/report.py results/stage3_improved.csv --section stage3 --readme README.md
 python3 lab/report.py results/stage3_upgrade.csv --upgrade --section upgrade --readme README.md
 python3 lab/report.py results/stage3_portmap.csv --section portmap --readme README.md
+python3 lab/report.py results/stage3_ipv6.csv --section ipv6 --readme README.md
 
 sudo ./lab/run_stage4.sh                    # traffic through the tunnel -> results/stage4_lab.csv
 python3 lab/report.py results/stage4_lab.csv --stage4 --section stage4 --readme README.md

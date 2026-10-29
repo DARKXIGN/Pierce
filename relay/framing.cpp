@@ -27,8 +27,9 @@ stun::Endpoint stream_endpoint(std::uint32_t id) {
 }
 
 std::optional<std::uint32_t> stream_id(const stun::Endpoint& ep) {
-  if (ep.ipv4[0] != 0 || ep.port != 0) return std::nullopt;
-  return (std::uint32_t{ep.ipv4[1]} << 16) | (std::uint32_t{ep.ipv4[2]} << 8) | ep.ipv4[3];
+  const auto a = ep.v4();
+  if (!ep.is_v4() || a[0] != 0 || ep.port != 0) return std::nullopt;
+  return (std::uint32_t{a[1]} << 16) | (std::uint32_t{a[2]} << 8) | a[3];
 }
 
 }  // namespace relay

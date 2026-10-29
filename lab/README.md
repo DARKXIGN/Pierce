@@ -41,6 +41,9 @@ Approximations to be aware of:
 - Mapping and `contacted` entries expire after the conntrack UDP timeout / 120 s.
 - Unsolicited UDP to a router's own WAN address is dropped in the `input` hook. Without that, Linux would deliver it locally, answer with ICMP port unreachable and confirm a conntrack entry for it. If the LAN host then sends to the same remote, masquerade sees the clash and picks another public port. An early probe from the peer would make the cone NAT endpoint-dependent. Real NATs drop such packets silently.
 
+## IPv6 (`IPV6`)
+`IPV6=A` (or `B`, `AB`) also gives that side IPv6: peer 2001:db8:1::2 (A) / 2001:db8:2::2 (B), router 2001:db8:1::1 / 2001:db8:2::1 on the LAN and 2001:db8:100::1 / ::2 on the internet bridge, obs 2001:db8:100::10. There is no NAT for IPv6, as with most real deployments: the router forwards it and filters statefully (replies to what the LAN sent, nothing unsolicited). On the nftables types that is the same `inet` forward chain as for IPv4, whose NAT and inbound rules are IPv4 only; `symmetric-sequential` gets an `ip6` table with the same rules. Addresses are added with `nodad` so they work at once. Needs a kernel with IPv6 (`setup.sh` exits with code 3 otherwise).
+
 ## Port mapping (`PORTMAP`)
 `PORTMAP=A` (or `B`, `AB`) makes that router also answer UPnP IGD, NAT-PMP and PCP requests from its LAN, as many home routers do, with [miniupnpd](https://miniupnp.tuxfamily.org/) 2.3 (nftables build):
 
@@ -69,6 +72,7 @@ nftables cannot hand out public ports in sequence, so `symmetric-sequential` is 
 - `run_stage2.sh delay` does the same for `DELAY_PAIRS` with `tc qdisc ... netem delay` on natA's WAN link (`DELAYS`, default 0/50/100/200 ms) and writes `results/stage2_delay.csv`. It needs the `sch_netem` kernel module; the script checks first and says what to install.
 - `run_stage2.sh stage3` runs the 5×5 matrix with the stage 3 techniques and two relays in `obs` (`192.0.32.10:3480`, `192.0.32.11:3480`, secret generated per run) → `results/stage3_improved.csv`, where `path` is `direct`, `relay` or `none`.
 - `run_stage2.sh portmap` runs the stage 3 matrix with `PORTMAP=A`: rows `<type>+portmap` for the four nftables types, then `symmetric-random+pcp|natpmp|upnp` (one protocol each, `--portmap <name>`) against `symmetric-random` → `results/stage3_portmap.csv`.
+- `run_stage2.sh ipv6` runs the stage 3 matrix with `IPV6=AB` (rows `<type>+ipv6`), then `symmetric-random+ipv6-A-only` with `IPV6=A`, which must fall back to IPv4 → `results/stage3_ipv6.csv`. The summary counts how many direct paths went over IPv6.
 - `run_stage2.sh upgrade` holds connections for `UPGRADE_HOLD` (16) seconds with a direct retry every `UPGRADE_RETRY_MS` (5000) for `UPGRADE_PAIRS` → `results/stage3_upgrade.csv` (`natA,natB,attempt,initial_path,upgrade_ms`).
 - `check_coord_outage.sh [natA] [natB]` connects two peers, kills the coordination and STUN servers (the relay stays up) and checks 10 s of keepalives. With `symmetric-random symmetric-random` the path is relayed.
 

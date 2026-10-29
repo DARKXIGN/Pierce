@@ -92,7 +92,7 @@ TEST(Detector, NoNatOnLoopbackLooksLikeFullCone) {
 
   // 127.0.0.2 is also loopback on Linux, but nobody listens there: the "alternate IP" mapping
   // request would time out, so point the alternate IP at the primary one.
-  stun::DetectorConfig cfg{primary, primary.ipv4, alt_port, std::chrono::milliseconds(100), 2};
+  stun::DetectorConfig cfg{primary, primary.v4(), alt_port, std::chrono::milliseconds(100), 2};
   stun::Detector det(cfg);
   const auto o = det.observe();
   ASSERT_TRUE(o.mapped_primary);

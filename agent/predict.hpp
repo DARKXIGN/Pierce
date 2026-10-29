@@ -30,6 +30,7 @@ NatInfo characterize(std::uint16_t p1, std::uint16_t p2, std::uint16_t p3);
 //
 //   - We are not sequential: the mapping the peer uses toward us is among i = 1..n, so we probe
 //     last_port + k * step for k = 1..window.
+// (n counts only our IPv4 candidates: a probe to an IPv6 address bypasses the IPv4 NAT.)
 //   - We are sequential too: we both probe predictions in the same order, k = 1, 2, ... The
 //     peer's k-th prediction leaves from its mapping n + k, and to get through our NAT our k-th
 //     prediction must target exactly that one, so we probe last_port + (n + k) * step. The same

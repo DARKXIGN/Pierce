@@ -14,7 +14,9 @@
 # Environment: USERNAT_LIFETIME (mapping lifetime in s, default 120), USERNAT_STEP (port step,
 # default 1), PIERCE_BUILD (build directory holding the usernat binary, default ./build),
 # PORTMAP (A, B or AB: which routers also do UPnP / NAT-PMP / PCP port mapping with miniupnpd;
-# needs ./lab/get_miniupnpd.sh first; nftables NAT types only).
+# needs ./lab/get_miniupnpd.sh first; nftables NAT types only),
+# IPV6 (A, B or AB: which sides also get IPv6 - not NATed, only filtered by the router; a side
+# without it stays IPv4-only).
 set -Eeuo pipefail  # -E: the ERR trap also fires inside functions
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
@@ -33,6 +35,12 @@ if [[ " $TYPE_A $TYPE_B " == *" symmetric-sequential "* && ! -x $USERNAT ]]; the
   exit 3
 fi
 
+IPV6_A=0 IPV6_B=0
+[[ ${IPV6:-} == *A* ]] && IPV6_A=1
+[[ ${IPV6:-} == *B* ]] && IPV6_B=1
+if [[ $IPV6_A$IPV6_B != 00 && ! -e /proc/net/if_inet6 ]]; then
+  echo "IPV6 needs a kernel with IPv6 (this one has it disabled, e.g. ipv6.disable=1)" >&2; exit 3
+fi
 PORTMAP_A=0 PORTMAP_B=0
 [[ ${PORTMAP:-} == *A* ]] && PORTMAP_A=1
 [[ ${PORTMAP:-} == *B* ]] && PORTMAP_B=1
@@ -73,6 +81,28 @@ ns_exec "$NS_PEER_A" ip route add default via "$NAT_A_LAN_IP"
 ns_exec "$NS_PEER_B" ip route add default via "$NAT_B_LAN_IP"
 enable_forward "$NS_NAT_A"
 enable_forward "$NS_NAT_B"
+# IPv6: addresses without duplicate address detection (nodad), so they work immediately, and
+# routes between the two LANs through the routers' WAN addresses. obs gets one whenever any side
+# has IPv6.
+v6_side() {  # v6_side <peer_ns> <nat_ns> <lan_if_peer> <lan_if_nat> <wan_if> <peer_ip6> <lan_ip6> <wan_ip6>
+  ns_exec "$1" ip -6 addr add "$6/64" dev "$3" nodad
+  ns_exec "$2" ip -6 addr add "$7/64" dev "$4" nodad
+  ns_exec "$2" ip -6 addr add "$8/64" dev "$5" nodad
+  ns_exec "$1" ip -6 route add default via "$7"
+  ns_exec "$2" sysctl -qw net.ipv6.conf.all.forwarding=1
+}
+if [[ $IPV6_A == 1 ]]; then
+  v6_side "$NS_PEER_A" "$NS_NAT_A" pA-lan nA-lan nA-wan "$PEER_A_IP6" "$NAT_A_LAN_IP6" "$NAT_A_WAN_IP6"
+fi
+if [[ $IPV6_B == 1 ]]; then
+  v6_side "$NS_PEER_B" "$NS_NAT_B" pB-lan nB-lan nB-wan "$PEER_B_IP6" "$NAT_B_LAN_IP6" "$NAT_B_WAN_IP6"
+fi
+if [[ $IPV6_A == 1 && $IPV6_B == 1 ]]; then
+  ns_exec "$NS_NAT_A" ip -6 route add 2001:db8:2::/64 via "$NAT_B_WAN_IP6"
+  ns_exec "$NS_NAT_B" ip -6 route add 2001:db8:1::/64 via "$NAT_A_WAN_IP6"
+fi
+if [[ $IPV6_A$IPV6_B != 00 ]]; then ns_exec "$NS_OBS" ip -6 addr add "$OBS_IP6/64" dev obs0 nodad; fi
+
 # The lab runs connection attempts several times a second, which no real host does. Linux allows
 # a host about 6 ICMP errors in a burst, then one per second, so with the default the agent's
 # probes for port mapping services (answered with ICMP port unreachable when absent) would start
@@ -100,6 +130,15 @@ table ip filter {
   chain forward {
     type filter hook forward priority 0; policy drop;
     meta l4proto udp drop
+    ct state established,related accept
+    iifname "$lan" oifname "$wan" accept
+  }
+}
+# The tables above are IPv4 only (usernat handles IPv4 only). IPv6 is routed by the kernel and
+# filtered like on every lab router: replies to what the LAN sent, nothing unsolicited.
+table ip6 filter {
+  chain forward {
+    type filter hook forward priority 0; policy drop;
     ct state established,related accept
     iifname "$lan" oifname "$wan" accept
   }
@@ -151,6 +190,8 @@ apply_nat() {
   # inet tables (not ip) so that miniupnpd, whose nftables backend only knows inet, can share them:
   # every base chain first jumps into a chain of miniupnpd's, empty unless PORTMAP runs it. Port
   # mappings it adds there come before the NAT type's own rules, as on a real router.
+  # inet also covers IPv6 (IPV6=...): there is no NAT for it (masquerade and the dnat/inbound
+  # rules are IPv4 only), so IPv6 gets the forward chain's stateful filtering and nothing else.
   ns_exec "$ns" nft -f - <<NFT
 table inet nat {
   chain prerouting_miniupnpd {}

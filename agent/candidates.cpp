@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "stun/udp.hpp"
+
 namespace agent {
 
 std::string_view to_string(CandidateType t) {
@@ -38,16 +40,25 @@ std::vector<Candidate> host_candidates(std::uint16_t port, std::string_view excl
   std::vector<Candidate> out;
   ifaddrs* list = nullptr;
   if (getifaddrs(&list) != 0) return out;
-  std::uint16_t local_pref = 65535;
+  // Local preference: IPv6 above IPv4 (as RFC 8421 suggests for dual-stack hosts), and within a
+  // family later interfaces slightly lower, so priorities stay unique.
+  std::uint16_t pref6 = 65535, pref4 = 32767;
   for (auto* ifa = list; ifa; ifa = ifa->ifa_next) {
-    if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+    if (!ifa->ifa_addr) continue;
+    const int family = ifa->ifa_addr->sa_family;
+    if (family != AF_INET && family != AF_INET6) continue;
     if (!(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) continue;
     if (!exclude.empty() && exclude == ifa->ifa_name) continue;
-    Endpoint ep;
-    std::memcpy(ep.ipv4.data(), &reinterpret_cast<sockaddr_in*>(ifa->ifa_addr)->sin_addr, 4);
+    Endpoint ep = stun::from_sockaddr(ifa->ifa_addr);
     ep.port = port;
-    // Later interfaces get a slightly lower local preference so priorities stay unique.
-    out.push_back({CandidateType::Host, ep, priority(CandidateType::Host, local_pref--)});
+    if (family == AF_INET6) {
+      // Link-local fe80::/10 needs an interface index to be usable and never reaches another
+      // network; IPv4-mapped addresses are IPv4 candidates in disguise.
+      if ((ep.ip[0] == 0xFE && (ep.ip[1] & 0xC0) == 0x80) || ep.is_v4()) continue;
+      out.push_back({CandidateType::Host, ep, priority(CandidateType::Host, pref6--)});
+    } else {
+      out.push_back({CandidateType::Host, ep, priority(CandidateType::Host, pref4--)});
+    }
   }
   freeifaddrs(list);
   return out;

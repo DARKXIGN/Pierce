@@ -21,7 +21,7 @@ bool Puncher::allowed(const Endpoint& from) const {
   // Same IP as some signaled candidate. The port may differ: a symmetric NAT on the peer's side
   // gives its probes to us a new port, and we must be able to answer that.
   return std::any_of(remote_.begin(), remote_.end(),
-                     [&](const Candidate& c) { return c.ep.ipv4 == from.ipv4; });
+                     [&](const Candidate& c) { return c.ep.same_ip(from); });
 }
 
 void Puncher::send(std::size_t local, probe::Kind kind, const probe::TransactionId& tid,
