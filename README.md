@@ -167,7 +167,38 @@ When no router answers, the probes fail at once with ICMP port unreachable; a ro
 The agent's one socket is dual-stack, and IPv6 interface addresses become host candidates (preferred over IPv4). With IPv6 there is usually no NAT, only the router's stateful firewall, and simultaneous probes open that like a port-restricted cone, so the symmetric IPv4 NATs stop mattering once both sides have IPv6. The lab's `IPV6=AB` gives both sides IPv6 behind such a firewall; `symmetric-random+ipv6-A-only` has it on one side only and must fall back to IPv4.
 
 <!-- report:ipv6:start -->
-Not measured in the development sandbox (its kernel has IPv6 disabled); CI runs it with 10 attempts per combination. Full run: `sudo ./lab/run_stage2.sh ipv6` on OCI.
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-sequential+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+ipv6-A-only | — | — | — | 0% [0–4] | — |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+ipv6 | 24 / 26 | 24 / 25 | 24 / 26 | 25 / 26 | 24 / 25 |
+| restricted+ipv6 | 24 / 63 | 24 / 25 | 24 / 64 | 25 / 26 | 24 / 25 |
+| port-restricted+ipv6 | 24 / 63 | 24 / 24 | 24 / 26 | 25 / 26 | 24 / 25 |
+| symmetric-random+ipv6 | 26 / 32 | 26 / 35 | 26 / 31 | 24 / 24 | 24 / 25 |
+| symmetric-sequential+ipv6 | 24 / 25 | 24 / 26 | 24 / 26 | 24 / 25 | 24 / 26 |
+| symmetric-random+ipv6-A-only | — | — | — | — | — |
+
+Relay usage: attempts that fell back to the relay [Wilson 95% CI].
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| restricted+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| port-restricted+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-random+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-sequential+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-random+ipv6-A-only | — | — | — | 100% [96–100] | — |
 <!-- report:ipv6:end -->
 
 Implemented and tested in the lab only: the author's home connection has no IPv6.
