@@ -119,7 +119,8 @@ run_combo() {
   relayed=$(awk -F, -v a="$la" -v b="$b" -v d="$delay" \
     '$1==a && $2==b && (d=="" || $3==d) && $NF ~ /^relay/' "$out" | wc -l)
   local v6=""
-  if [[ -n ${remotes:-} ]]; then v6=", $(grep -c '^\[' "$remotes") over IPv6"; : > "$remotes"; fi
+  # grep -c prints 0 but exits 1 when nothing matches; with set -e that would end the script.
+  if [[ -n ${remotes:-} ]]; then v6=", $(grep -c '^\[' "$remotes" || true) over IPv6"; : > "$remotes"; fi
   printf '%-28s %-21s %s%s/%s direct%s%s\n' "$la" "$b" "${delay:+delay=${delay}ms }" "$ok" "$attempts" \
     "$([[ $use_relays == 1 ]] && echo ", $relayed relay")" "$v6"
 }
@@ -155,6 +156,17 @@ case $mode in
     echo "natA,natB,attempt,success,time_to_connect_ms,probes_sent,path" > "$out"
     remotes=$(mktemp)
     export IPV6=AB
+    # First make sure the lab's IPv6 works at all, so a broken lab is not mistaken for
+    # "the agents preferred IPv4".
+    "$here/teardown.sh" >/dev/null 2>&1
+    "$here/setup.sh" full full >/dev/null 2>&1 || { echo "IPv6 lab check: setup failed" >&2; exit 1; }
+    if ns_exec "$NS_PEER_A" ping -6 -c 2 -W 1 "$PEER_B_IP6" >/dev/null 2>&1; then
+      echo "IPv6 lab check: ping $PEER_A_IP6 -> $PEER_B_IP6 OK"
+    else
+      echo "IPv6 lab check: ping $PEER_A_IP6 -> $PEER_B_IP6 FAILED" >&2
+      ns_exec "$NS_PEER_A" ip -6 addr >&2; ns_exec "$NS_PEER_A" ip -6 route >&2
+      exit 1
+    fi
     for a in "${NAT_TYPES[@]}"; do
       label_a="$a+ipv6"
       for b in "${NAT_TYPES[@]}"; do run_combo "$a" "$b"; done
