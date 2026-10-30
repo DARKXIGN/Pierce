@@ -164,7 +164,8 @@ case $mode in
     "$here/setup.sh" full full >/dev/null 2>&1 || { echo "IPv6 lab check: setup failed" >&2; exit 1; }
     # Hop by hop, so a failure says where the path breaks.
     v6_ping() {  # v6_ping <from_ns> <from_label> <to_addr>
-      if ns_exec "$1" ping -6 -c 2 -W 1 "$3" >/dev/null 2>&1; then
+      # 3 tries, 2 s each: the first may wait for neighbour discovery on both routers.
+      if ns_exec "$1" ping -6 -c 3 -W 2 "$3" >/dev/null 2>&1; then
         echo "IPv6 lab check: $2 -> $3 OK"
       else
         echo "IPv6 lab check: $2 -> $3 FAILED" >&2

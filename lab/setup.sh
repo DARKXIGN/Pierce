@@ -101,7 +101,12 @@ if [[ $IPV6_A == 1 && $IPV6_B == 1 ]]; then
   ns_exec "$NS_NAT_A" ip -6 route add 2001:db8:2::/64 via "$NAT_B_WAN_IP6"
   ns_exec "$NS_NAT_B" ip -6 route add 2001:db8:1::/64 via "$NAT_A_WAN_IP6"
 fi
-if [[ $IPV6_A$IPV6_B != 00 ]]; then ns_exec "$NS_OBS" ip -6 addr add "$OBS_IP6/64" dev obs0 nodad; fi
+if [[ $IPV6_A$IPV6_B != 00 ]]; then
+  ns_exec "$NS_OBS" ip -6 addr add "$OBS_IP6/64" dev obs0 nodad
+  # obs must be able to answer the LANs too (it has no default route).
+  [[ $IPV6_A == 1 ]] && ns_exec "$NS_OBS" ip -6 route add 2001:db8:1::/64 via "$NAT_A_WAN_IP6"
+  [[ $IPV6_B == 1 ]] && ns_exec "$NS_OBS" ip -6 route add 2001:db8:2::/64 via "$NAT_B_WAN_IP6"
+fi
 
 # The lab runs connection attempts several times a second, which no real host does. Linux allows
 # a host about 6 ICMP errors in a burst, then one per second, so with the default the agent's
