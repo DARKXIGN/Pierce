@@ -173,7 +173,7 @@ apply_nat() {
   # public port == internal port and no port rewrite is needed. (Valid for a one-host LAN, which is
   # exactly what the lab has.)
   if [[ $type == full || $type == restricted ]]; then
-    dnat="iifname \"$wan\" udp dport 1024-65535 dnat ip to $host;"
+    dnat="iifname \"$wan\" meta nfproto ipv4 udp dport 1024-65535 dnat ip to $host;"
   fi
 
   case "$type" in
@@ -190,14 +190,16 @@ apply_nat() {
   # inet tables (not ip) so that miniupnpd, whose nftables backend only knows inet, can share them:
   # every base chain first jumps into a chain of miniupnpd's, empty unless PORTMAP runs it. Port
   # mappings it adds there come before the NAT type's own rules, as on a real router.
-  # inet also covers IPv6 (IPV6=...): there is no NAT for it (masquerade and the dnat/inbound
-  # rules are IPv4 only), so IPv6 gets the forward chain's stateful filtering and nothing else.
+  # inet also covers IPv6 (IPV6=...). It must not be NATed, so masquerade and dnat are limited to
+  # IPv4 with "meta nfproto ipv4" (without it, masquerade in an inet table translates IPv6 too:
+  # CI run 13 found symmetric-random NATing IPv6 into a symmetric NAT66). IPv6 gets only the
+  # forward chain's stateful filtering; the inbound rules (ip protocol ...) are IPv4 only.
   ns_exec "$ns" nft -f - <<NFT
 table inet nat {
   chain prerouting_miniupnpd {}
   chain postrouting_miniupnpd {}
   chain prerouting { type nat hook prerouting priority -100; jump prerouting_miniupnpd; ${dnat} }
-  chain postrouting { type nat hook postrouting priority 100; jump postrouting_miniupnpd; oifname "$wan" ${snat}; }
+  chain postrouting { type nat hook postrouting priority 100; jump postrouting_miniupnpd; oifname "$wan" meta nfproto ipv4 ${snat}; }
 }
 table inet filter {
   # Remembers (internal ip, internal port, remote ip) for every outbound UDP packet. Used by "restricted".
