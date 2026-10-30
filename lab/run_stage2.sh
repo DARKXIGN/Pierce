@@ -162,15 +162,27 @@ case $mode in
     # obs answer without a hole being punched first.
     "$here/teardown.sh" >/dev/null 2>&1
     "$here/setup.sh" full full >/dev/null 2>&1 || { echo "IPv6 lab check: setup failed" >&2; exit 1; }
-    for target in "$NAT_B_WAN_IP6" "$OBS_IP6"; do
-      if ns_exec "$NS_PEER_A" ping -6 -c 2 -W 1 "$target" >/dev/null 2>&1; then
-        echo "IPv6 lab check: ping $PEER_A_IP6 -> $target OK"
+    # Hop by hop, so a failure says where the path breaks.
+    v6_ping() {  # v6_ping <from_ns> <from_label> <to_addr>
+      if ns_exec "$1" ping -6 -c 2 -W 1 "$3" >/dev/null 2>&1; then
+        echo "IPv6 lab check: $2 -> $3 OK"
       else
-        echo "IPv6 lab check: ping $PEER_A_IP6 -> $target FAILED" >&2
-        ns_exec "$NS_NAT_A" ip -6 route >&2
-        exit 1
+        echo "IPv6 lab check: $2 -> $3 FAILED" >&2
+        return 1
       fi
-    done
+    }
+    if ! { v6_ping "$NS_PEER_A" peerA "$NAT_A_LAN_IP6" && v6_ping "$NS_NAT_A" natA "$NAT_B_WAN_IP6" &&
+           v6_ping "$NS_PEER_A" peerA "$NAT_A_WAN_IP6" && v6_ping "$NS_PEER_A" peerA "$NAT_B_WAN_IP6" &&
+           v6_ping "$NS_PEER_A" peerA "$OBS_IP6"; }; then
+      for ns in "$NS_NAT_A" "$NS_NAT_B"; do
+        echo "--- $ns routes / neighbours / sysctl / forward chain" >&2
+        ns_exec "$ns" ip -6 route >&2
+        ns_exec "$ns" ip -6 neigh >&2
+        ns_exec "$ns" sysctl net.ipv6.conf.all.forwarding >&2
+        ns_exec "$ns" nft list chain inet filter forward >&2
+      done
+      exit 1
+    fi
     for a in "${NAT_TYPES[@]}"; do
       label_a="$a+ipv6"
       for b in "${NAT_TYPES[@]}"; do run_combo "$a" "$b"; done
