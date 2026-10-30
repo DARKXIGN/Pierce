@@ -201,7 +201,15 @@ On every relayed run, tcpdump checks the relay hop: the pings carry a marker tha
 | port-restricted+udp-blocked × port-restricted | relay-tls | 5 | 0.53 | 0% | 346 / 342 |
 <!-- report:stage4:end -->
 
-Real networks (home ↔ OCI, hotspot ↔ OCI, home ↔ hotspot) and NAT mapping lifetimes are not measured yet.
+#### NAT mapping lifetime (real routers)
+
+How long a real home router or phone hotspot keeps an idle UDP mapping, measured with `tools/maplife.py` (server on OCI, client on any PC behind the NAT, Python standard library only). The design sets the keepalive to half of it.
+
+<!-- report:maplife:start -->
+Not measured yet.
+<!-- report:maplife:end -->
+
+Real networks (home ↔ OCI, hotspot ↔ OCI, home ↔ hotspot) are not measured yet: they need a Linux machine behind the home router or hotspot.
 
 ## Build
 
@@ -301,6 +309,22 @@ sudo build/pierce-agent --coord ... --stun ... --id A --peer B \
 ```
 
 After connecting, the agent moves packets between the TUN device and BoringTun, and BoringTun's datagrams go out on the socket and path the connection was made on: the main socket, a birthday socket, or the main socket via the relay. On that socket the first byte tells WireGuard (1–4) and probes (0xFF) apart. Peer public keys are exchanged in advance (here as files), never through the coordination server, so a compromised coordinator cannot slip in a fake peer: the WireGuard handshake would fail.
+
+## Measuring a NAT's mapping lifetime
+
+```sh
+# on OCI (a public host): let UDP 3490 in, then start the server
+#   OCI console: VCN -> Security List -> Ingress rule: UDP, destination port 3490
+sudo iptables -I INPUT -p udp --dport 3490 -j ACCEPT        # Ubuntu images on OCI also filter
+python3 tools/maplife.py server --port 3490
+
+# on a PC behind the router (Windows works: python, not python3)
+python tools/maplife.py client --server <OCI public IP>:3490 --network home --runs 3
+python tools/maplife.py client --server <OCI public IP>:3490 --network hotspot --runs 3
+python3 lab/report.py results/stage4_mapping_lifetime.csv --maplife --section maplife --readme README.md
+```
+
+Each run opens one socket per idle time (10 s to 15 min) and asks the server to answer after that long; the answers that still arrive show how long the router kept the mapping. A run takes about 15 minutes; keep the PC from sleeping and do not use the network heavily meanwhile (a router under pressure may drop mappings early).
 
 ## Documentation
 

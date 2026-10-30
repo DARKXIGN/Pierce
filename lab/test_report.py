@@ -99,6 +99,15 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("| symmetric-random × port-restricted | direct | 2 | 0.40 | 0% | 800 / 800 |", body)
         self.assertIn("| symmetric-random × port-restricted | relay | 1 | 0.80 | 2% | 600 / 600 |", body)
 
+    def test_maplife_table(self):
+        rows = ["network,run,delay_s,alive"]
+        for run, last_ok in ((1, 60), (2, 90)):
+            rows += [f"home,{run},{d},{int(d <= last_ok)}" for d in (30, 60, 90, 120)]
+        rows += [f"hotspot,1,{d},1" for d in (30, 60)]
+        body = report.render_maplife([self.write("\n".join(rows) + "\n")])
+        self.assertIn("| home | 2 | 60–90 s, 90–120 s | 30 s |", body)
+        self.assertIn("| hotspot | 1 | ≥ 60 s | 30 s |", body)
+
     def test_pivot_by_column(self):
         rows = ["natA,natB,delay_ms,attempt,success,time_to_connect_ms,probes_sent,path"]
         for d in ("200", "0", "50"):

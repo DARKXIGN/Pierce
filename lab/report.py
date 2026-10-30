@@ -21,6 +21,11 @@ With --stage4 the input is results/stage4_lab.csv (natA,natB,run,path,ping_avg_m
 iperf_mbps) and the output has one row per NAT pair and path: runs, median ping, worst loss,
 median and minimum iperf3 throughput.
 
+With --maplife the input is results/stage4_mapping_lifetime.csv (network,run,delay_s,alive, from
+tools/maplife.py) and the output has one row per network: the lifetime bounds per run (longest
+idle time that was answered, shortest that was not) and the keepalive interval to use, half the
+smallest lower bound.
+
 With --by COLUMN the table has one row per NAT pair that occurs in the data and one column per
 value of COLUMN (e.g. the extra delay), instead of the NAT A x NAT B grid.
 
@@ -197,6 +202,27 @@ def render_stage4(paths: list[str]) -> str:
     return "\n".join(lines)
 
 
+def render_maplife(paths: list[str]) -> str:
+    runs = defaultdict(dict)  # (network, run) -> {delay: alive}
+    for path in paths:
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                runs[(row["network"], row["run"])][int(row["delay_s"])] = row["alive"].strip() == "1"
+    per_net = defaultdict(list)  # network -> [(lo, hi or None)]
+    for (net, _), probes in runs.items():
+        ok = [d for d, a in probes.items() if a]
+        lo = max(ok) if ok else 0
+        hi = min((d for d, a in probes.items() if not a and d > lo), default=None)
+        per_net[net].append((lo, hi))
+    lines = ["| network | runs | idle mapping lifetime per run | keepalive (half the lower bound) |",
+             "|---|---|---|---|"]
+    for net in sorted(per_net):
+        bounds = sorted(per_net[net])
+        text = ", ".join(f"{lo}–{hi} s" if hi is not None else f"≥ {lo} s" for lo, hi in bounds)
+        lines.append(f"| {net} | {len(bounds)} | {text} | {bounds[0][0] // 2} s |")
+    return "\n".join(lines)
+
+
 def splice(readme: str, section: str, body: str) -> str:
     start, end = f"<!-- report:{section}:start -->", f"<!-- report:{section}:end -->"
     pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
@@ -215,12 +241,15 @@ def main() -> None:
     ap.add_argument("--by", help="pivot on this column instead of the NAT A x NAT B grid")
     ap.add_argument("--upgrade", action="store_true", help="input is stage3_upgrade.csv")
     ap.add_argument("--stage4", action="store_true", help="input is stage4_lab.csv")
+    ap.add_argument("--maplife", action="store_true", help="input is stage4_mapping_lifetime.csv")
     args = ap.parse_args()
 
     if args.upgrade:
         body = render_upgrade(args.csv)
     elif args.stage4:
         body = render_stage4(args.csv)
+    elif args.maplife:
+        body = render_maplife(args.csv)
     else:
         cells, has_time = load(args.csv, args.time_col, args.by)
         if not cells:
