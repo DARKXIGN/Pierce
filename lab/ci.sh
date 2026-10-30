@@ -62,11 +62,11 @@ if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
     python3 "$here/report.py" "$out/stage1_nat_detect.csv" --time-col detect_ms --time-label "Detection time"
     echo "### Stage 3: direct connection with prediction, birthday probing, relay"
     python3 "$here/report.py" "$out/stage3_improved.csv"
-    if [[ -f $out/stage3_ipv6.csv ]]; then
+    if [[ $(wc -l < "$out/stage3_ipv6.csv" 2>/dev/null || echo 0) -gt 1 ]]; then
       echo "### Stage 3 with IPv6 on both sides"
       python3 "$here/report.py" "$out/stage3_ipv6.csv"
     fi
-    if [[ -f $out/stage3_portmap.csv ]]; then
+    if [[ $(wc -l < "$out/stage3_portmap.csv" 2>/dev/null || echo 0) -gt 1 ]]; then
       echo "### Stage 3 with port mapping on router A"
       python3 "$here/report.py" "$out/stage3_portmap.csv"
     fi
