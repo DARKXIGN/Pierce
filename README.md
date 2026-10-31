@@ -105,7 +105,7 @@ Success rate [Wilson 95% CI], n = 100 attempts per cell.
 |---|---|---|---|---|---|
 | full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
 | restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
-| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 63% [53–72] | 100% [96–100] |
+| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 61% [51–70] | 100% [96–100] |
 | symmetric-random | 100% [96–100] | 100% [96–100] | 63% [53–72] | 0% [0–4] | 0% [0–4] |
 | symmetric-sequential | 100% [96–100] | 100% [96–100] | 100% [96–100] | 0% [0–4] | 100% [96–100] |
 
@@ -113,11 +113,11 @@ Time to connect, median / p95 in ms (successful attempts only).
 
 | NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
 |---|---|---|---|---|---|
-| full | 45 / 46 | 45 / 45 | 45 / 45 | 26 / 27 | 45 / 46 |
-| restricted | 45 / 45 | 45 / 46 | 45 / 46 | 28 / 29 | 45 / 47 |
-| port-restricted | 45 / 46 | 45 / 46 | 45 / 45 | 212 / 318 | 68 / 69 |
-| symmetric-random | 26 / 30 | 28 / 31 | 191 / 308 | — | — |
-| symmetric-sequential | 45 / 46 | 46 / 46 | 68 / 69 | — | 54 / 55 |
+| full | 44 / 45 | 44 / 44 | 44 / 45 | 25 / 26 | 44 / 45 |
+| restricted | 44 / 45 | 44 / 45 | 44 / 44 | 26 / 28 | 44 / 45 |
+| port-restricted | 44 / 45 | 44 / 45 | 44 / 45 | 220 / 304 | 67 / 67 |
+| symmetric-random | 26 / 34 | 27 / 35 | 220 / 314 | — | — |
+| symmetric-sequential | 44 / 45 | 44 / 45 | 67 / 68 | — | 53 / 54 |
 
 Relay usage: attempts that fell back to the relay [Wilson 95% CI].
 
@@ -125,7 +125,7 @@ Relay usage: attempts that fell back to the relay [Wilson 95% CI].
 |---|---|---|---|---|---|
 | full | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
 | restricted | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
-| port-restricted | 0% [0–4] | 0% [0–4] | 0% [0–4] | 37% [28–47] | 0% [0–4] |
+| port-restricted | 0% [0–4] | 0% [0–4] | 0% [0–4] | 39% [30–49] | 0% [0–4] |
 | symmetric-random | 0% [0–4] | 0% [0–4] | 37% [28–47] | 100% [96–100] | 100% [96–100] |
 | symmetric-sequential | 0% [0–4] | 0% [0–4] | 0% [0–4] | 100% [96–100] | 0% [0–4] |
 <!-- report:stage3:end -->
