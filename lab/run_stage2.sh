@@ -74,11 +74,22 @@ start_servers() {
 # common.sh enables set -e; wait returns the killed server's status (143), which is expected.
 stop_servers() { kill $servers 2>/dev/null; wait $servers 2>/dev/null || true; }
 
+# Each attempt binds the agents to a new local port (--port). With kernel-picked ports, an
+# attempt now and then got the same port as one a minute earlier, whose NAT mappings were still
+# alive (usernat keeps them 120 s): the NAT then answered STUN from those old mappings, and port
+# prediction extrapolated from stale numbers (symmetric-sequential pairs failed ~2 in 100). A real
+# agent does not restart every second on the same port, so attempts must not share NAT state.
+# Ports 20000-29999 stay clear of the kernel's ephemeral range (birthday sockets use that).
+# (Called directly, not as $(...): a subshell could not advance the counter.)
+agent_port=19999
+next_port() { agent_port=$((agent_port >= 29999 ? 20000 : agent_port + 1)); }
+
 # attempt <prefix>: one connection attempt; appends "<prefix>,success,ms,probes,path" to $out.
 attempt() {
   local prefix=$1 ra rb
   ra=$(mktemp); rb=$(mktemp)
-  local args=(--coord "$COORD" --stun "$STUN" "${agent_extra[@]}")
+  next_port
+  local args=(--coord "$COORD" --stun "$STUN" "${agent_extra[@]}" --port "$agent_port")
   ns_exec "$NS_PEER_A" "$build/pierce-agent" "${args[@]}" --id A --peer B >"$ra" 2>/dev/null &
   local pa=$!
   ns_exec "$NS_PEER_B" "$build/pierce-agent" "${args[@]}" --id B --peer A >"$rb" 2>/dev/null
@@ -129,7 +140,9 @@ run_combo() {
 upgrade_attempt() {
   local a=$1 b=$2 i=$3 ea eb oa
   ea=$(mktemp); eb=$(mktemp); oa=$(mktemp)
-  local args=(--coord "$COORD" --stun "$STUN" "${agent_extra[@]}" --hold "${UPGRADE_HOLD:-16}"
+  next_port
+  local args=(--coord "$COORD" --stun "$STUN" "${agent_extra[@]}" --port "$agent_port"
+              --hold "${UPGRADE_HOLD:-16}"
               --keepalive-ms 1000 --retry-direct-ms "${UPGRADE_RETRY_MS:-5000}")
   ns_exec "$NS_PEER_A" "$build/pierce-agent" "${args[@]}" --id A --peer B >"$oa" 2>"$ea" &
   local pa=$!

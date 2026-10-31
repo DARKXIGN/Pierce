@@ -118,9 +118,9 @@ UdpSocket::UdpSocket(const Endpoint& local) {
   Endpoint bind_to = local;
   family_ = local.is_v4() ? AF_INET : AF_INET6;
   fd_ = socket(family_, SOCK_DGRAM, 0);
-  if (fd_ < 0 && family_ == AF_INET6 && errno == EAFNOSUPPORT && local == Endpoint{}) {
+  if (fd_ < 0 && family_ == AF_INET6 && errno == EAFNOSUPPORT && local.ip == Ipv6{}) {
     family_ = AF_INET;
-    bind_to = Endpoint{Ipv4{}, 0};
+    bind_to = Endpoint{Ipv4{}, local.port};
     fd_ = socket(AF_INET, SOCK_DGRAM, 0);
   }
   if (fd_ < 0) throw_errno("socket");

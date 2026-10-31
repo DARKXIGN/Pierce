@@ -3,7 +3,7 @@
 //   pierce-agent --coord 192.0.32.10:50051 --stun 192.0.32.10:3478 --id A --peer B
 //                [--stun-alt-ip 192.0.32.11] [--stun-alt-port 3479] [--predict-window 32]
 //                [--birthday 256] [--retry-direct-ms 30000]
-//                [--portmap auto|pcp|natpmp|upnp|off]
+//                [--portmap auto|pcp|natpmp|upnp|off] [--port 0]
 //                [--tun pierce0 --wg-key PRIVATE --wg-peer PUBLIC]
 //                [--timeout-ms 3000] [--signal-timeout-ms 5000] [--interval-ms 20]
 //                [--hold SEC] [--keepalive-ms 25000]
@@ -25,6 +25,7 @@
 // While relayed and holding (--hold), it asks for a new direct attempt every --retry-direct-ms
 // (0 = never) and reports "upgrade_ms=N" on stderr if one succeeds (time since the relay
 // connected).
+// --port binds the agent's one UDP socket to that local port (default 0: the kernel picks one).
 // --portmap (default auto) asks the router to open the socket's port, trying PCP, NAT-PMP and
 // UPnP in that order (or only the one named); a mapped port becomes a "portmap" candidate.
 // With --tun (stage 4) the agent runs the WireGuard data plane after connecting instead of probe
@@ -72,7 +73,7 @@ namespace pb = pierce::coord;
       "usage: pierce-agent --coord HOST:PORT --stun IP:PORT --id ID --peer ID [--stun-alt-ip IP]\n"
       "                    [--stun-alt-port N] [--predict-window N] [--birthday N] [--timeout-ms N]\n"
       "                    [--signal-timeout-ms N] [--interval-ms N] [--hold SEC] [--keepalive-ms N]\n"
-      "                    [--retry-direct-ms N] [--portmap auto|pcp|natpmp|upnp|off]\n"
+      "                    [--retry-direct-ms N] [--portmap auto|pcp|natpmp|upnp|off] [--port N]\n"
       "                    [--tun NAME --wg-key PRIVATE --wg-peer PUBLIC]\n",
       stderr);
   std::exit(2);
@@ -166,6 +167,7 @@ int main(int argc, char** argv) try {
   auto keepalive = std::chrono::milliseconds(25000);
   auto retry_direct = std::chrono::milliseconds(30000);
   std::string tun_name, wg_key, wg_peer;
+  std::uint16_t local_port = 0;  // 0 = let the kernel pick
   auto portmap_order = *agent::parse_portmap("auto");
   for (int i = 1; i < argc; ++i) {
     std::string_view a = argv[i];
@@ -192,7 +194,8 @@ int main(int argc, char** argv) try {
       auto o = agent::parse_portmap(value());
       if (!o) usage();
       portmap_order = *o;
-    } else if (a == "--tun") tun_name = value();
+    } else if (a == "--port") local_port = static_cast<std::uint16_t>(std::atoi(value().c_str()));
+    else if (a == "--tun") tun_name = value();
     else if (a == "--wg-key") wg_key = value();
     else if (a == "--wg-peer") wg_peer = value();
     else usage();
@@ -224,7 +227,9 @@ int main(int argc, char** argv) try {
 
   // 1. One UDP socket for everything: STUN, probes (and WireGuard later). NAT mappings belong to
   //    a socket, so the address STUN reports is only useful if the probes leave from it too.
-  stun::UdpSocket sock;
+  stun::Endpoint local_ep;
+  local_ep.port = local_port;
+  stun::UdpSocket sock(local_ep);
   std::vector<Candidate> mine;
   agent::NatInfo my_nat;
 
