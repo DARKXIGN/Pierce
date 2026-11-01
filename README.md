@@ -4,6 +4,18 @@ A WireGuard-based mesh VPN agent. The goal is to raise the **direct connection s
 
 > Why not just use Tailscale? Tailscale works well, but its NAT traversal is a black box to its users: I wanted to see *why* a connection ends up on a relay and measure how much each technique (hole punching, port prediction, birthday probing) actually helps, so I built the traversal engine myself and test it in a reproducible NAT lab.
 
+## Summary
+
+Measured in the NAT lab on OCI (five NAT types, every 5×5 combination, 100 attempts each); the tables below have the confidence intervals.
+
+- **Direct connections, all 25 combinations: 68% → 85%** (1700 → 2124 of 2500 attempts) from plain hole punching (stage 2) to the stage 3 techniques.
+- **Port prediction** turns every pair with a `symmetric-sequential` NAT and a port-restricted or sequential peer from 0% to 100% direct, including sequential × sequential.
+- **Birthday probing** (256 sockets × 256 guessed ports) gets `symmetric-random` × `port-restricted` from 0% to 61–63%, matching the expected 1 − e^(−256·256/64512) ≈ 64%.
+- **Nothing is left unconnected**: every attempt that fails direct is on a relay after 3 s (376 of 2500), and those that can go direct later upgrade from the relay (100% of them, median ≈ 5 s).
+- **Port mapping** (PCP, NAT-PMP, UPnP) and **IPv6** each make every combination direct in the lab (2300/2300 and 25/25 combinations).
+- **Data plane**: WireGuard (BoringTun) through the punched path, 420–680 Mbit/s iperf3 direct or over the UDP relay in the lab, and about 350 Mbit/s over the TCP/TLS relay fallback for networks that block UDP.
+- **Real network**: the home network (a double NAT) keeps an idle UDP mapping for 20–30 s, so the default keepalive is 10 s. Connection runs on real networks are not measured yet.
+
 ## Results
 
 All tables are generated from the per-attempt CSVs in `results/` by `lab/report.py`; do not edit them by hand. Success rates come with Wilson 95% confidence intervals.
