@@ -237,8 +237,12 @@ On every relayed run, tcpdump checks the relay hop: the pings carry a marker tha
 How long a real home router or phone hotspot keeps an idle UDP mapping, measured with `tools/maplife.py` (server on OCI, client on any PC behind the NAT, Python standard library only). The design sets the keepalive to half of it.
 
 <!-- report:maplife:start -->
-Not measured yet.
+| network | runs | idle mapping lifetime per run | keepalive (half the lower bound) |
+|---|---|---|---|
+| home | 3 | 20–30 s, 20–30 s, 20–30 s | 10 s |
 <!-- report:maplife:end -->
+
+The phone hotspot is not measured: none was available. The home router dropped an idle mapping after 20–30 s in all three runs, which brackets the 25 s default keepalive, so 25 s is not safe behind this router; half the lower bound is 10 s.
 
 Real networks (home ↔ OCI, hotspot ↔ OCI, home ↔ hotspot) are not measured yet: they need a Linux machine behind the home router or hotspot.
 
