@@ -6,7 +6,7 @@
 //                [--portmap auto|pcp|natpmp|upnp|off] [--port 0]
 //                [--tun pierce0 --wg-key PRIVATE --wg-peer PUBLIC]
 //                [--timeout-ms 3000] [--signal-timeout-ms 5000] [--interval-ms 20]
-//                [--hold SEC] [--keepalive-ms 25000]
+//                [--hold SEC] [--keepalive-ms 10000]
 //
 // With --stun-alt-ip, the agent also asks the STUN server's other IP and other port for its public
 // port, from the same socket, to learn how its NAT maps ports (predict.hpp). If the peer's NAT
@@ -164,7 +164,9 @@ int main(int argc, char** argv) try {
   agent::PunchOptions popt;
   auto signal_timeout = std::chrono::milliseconds(5000);
   int hold_s = 0;
-  auto keepalive = std::chrono::milliseconds(25000);
+  // 10 s: half the lower bound of the shortest idle UDP mapping lifetime measured on a real
+  // network (home, 20-30 s; README "NAT mapping lifetime"). 25 s would not be safe there.
+  auto keepalive = std::chrono::milliseconds(10000);
   auto retry_direct = std::chrono::milliseconds(30000);
   std::string tun_name, wg_key, wg_peer;
   std::uint16_t local_port = 0;  // 0 = let the kernel pick
