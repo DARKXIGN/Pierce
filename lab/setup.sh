@@ -9,7 +9,14 @@
 #   port-restricted       endpoint-independent                      only remote IP:port pairs this endpoint has sent to
 #   symmetric-random      endpoint-dependent, random port           only remote IP:port pairs
 #   symmetric-sequential  endpoint-dependent, next port in sequence only remote IP:port pairs
-#                         (needs the userspace NAT in lab/usernat/; not implemented yet)
+#                         (the C++ userspace NAT in lab/usernat/; build it first with cmake)
+#
+# Environment: USERNAT_LIFETIME (mapping lifetime in s, default 120), USERNAT_STEP (port step,
+# default 1), PIERCE_BUILD (build directory holding the usernat binary, default ./build),
+# PORTMAP (A, B or AB: which routers also do UPnP / NAT-PMP / PCP port mapping with miniupnpd;
+# needs ./lab/get_miniupnpd.sh first; nftables NAT types only),
+# IPV6 (A, B or AB: which sides also get IPv6 - not NATed, only filtered by the router; a side
+# without it stays IPv4-only).
 set -Eeuo pipefail  # -E: the ERR trap also fires inside functions
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=common.sh
@@ -21,13 +28,30 @@ TYPE_B=${2:-full}
 for t in "$TYPE_A" "$TYPE_B"; do
   [[ " ${NAT_TYPES[*]} " == *" $t "* ]] || { echo "unknown NAT type: $t (use: ${NAT_TYPES[*]})" >&2; exit 2; }
 done
-for t in "$TYPE_A" "$TYPE_B"; do
-  if [[ $t == symmetric-sequential ]]; then
-    # nftables cannot hand out ports in sequence; this type will be the C++ userspace NAT (lab/usernat/).
-    echo "NAT type 'symmetric-sequential' not implemented yet (needs lab/usernat/, roadmap stage 1)" >&2
-    exit 3
+USERNAT=${PIERCE_BUILD:-"$here/../build"}/usernat
+if [[ " $TYPE_A $TYPE_B " == *" symmetric-sequential "* && ! -x $USERNAT ]]; then
+  # nftables cannot hand out ports in sequence, so this type needs the C++ userspace NAT.
+  echo "symmetric-sequential needs $USERNAT: run cmake -B build && cmake --build build" >&2
+  exit 3
+fi
+
+IPV6_A=0 IPV6_B=0
+[[ ${IPV6:-} == *A* ]] && IPV6_A=1
+[[ ${IPV6:-} == *B* ]] && IPV6_B=1
+if [[ $IPV6_A$IPV6_B != 00 && ! -e /proc/net/if_inet6 ]]; then
+  echo "IPV6 needs a kernel with IPv6 (this one has it disabled, e.g. ipv6.disable=1)" >&2; exit 3
+fi
+PORTMAP_A=0 PORTMAP_B=0
+[[ ${PORTMAP:-} == *A* ]] && PORTMAP_A=1
+[[ ${PORTMAP:-} == *B* ]] && PORTMAP_B=1
+MINIUPNPD=${PIERCE_BUILD:-"$here/../build"}/miniupnpd/usr/sbin/miniupnpd
+if [[ $PORTMAP_A$PORTMAP_B != 00 ]]; then
+  [[ -x $MINIUPNPD ]] || { echo "PORTMAP needs $MINIUPNPD: run ./lab/get_miniupnpd.sh" >&2; exit 3; }
+  if [[ ($PORTMAP_A == 1 && $TYPE_A == symmetric-sequential) || ($PORTMAP_B == 1 && $TYPE_B == symmetric-sequential) ]]; then
+    # miniupnpd programs nftables; the userspace NAT does not read nftables rules.
+    echo "PORTMAP is not available for symmetric-sequential (userspace NAT)" >&2; exit 3
   fi
-done
+fi
 
 if lab_exists; then
   echo "lab already up; run: sudo ./lab/teardown.sh" >&2
@@ -57,11 +81,92 @@ ns_exec "$NS_PEER_A" ip route add default via "$NAT_A_LAN_IP"
 ns_exec "$NS_PEER_B" ip route add default via "$NAT_B_LAN_IP"
 enable_forward "$NS_NAT_A"
 enable_forward "$NS_NAT_B"
+# IPv6: addresses without duplicate address detection (nodad), so they work immediately, and
+# routes between the two LANs through the routers' WAN addresses. obs gets one whenever any side
+# has IPv6.
+v6_side() {  # v6_side <peer_ns> <nat_ns> <lan_if_peer> <lan_if_nat> <wan_if> <peer_ip6> <lan_ip6> <wan_ip6>
+  ns_exec "$1" ip -6 addr add "$6/64" dev "$3" nodad
+  ns_exec "$2" ip -6 addr add "$7/64" dev "$4" nodad
+  ns_exec "$2" ip -6 addr add "$8/64" dev "$5" nodad
+  ns_exec "$1" ip -6 route add default via "$7"
+  ns_exec "$2" sysctl -qw net.ipv6.conf.all.forwarding=1
+}
+if [[ $IPV6_A == 1 ]]; then
+  v6_side "$NS_PEER_A" "$NS_NAT_A" pA-lan nA-lan nA-wan "$PEER_A_IP6" "$NAT_A_LAN_IP6" "$NAT_A_WAN_IP6"
+fi
+if [[ $IPV6_B == 1 ]]; then
+  v6_side "$NS_PEER_B" "$NS_NAT_B" pB-lan nB-lan nB-wan "$PEER_B_IP6" "$NAT_B_LAN_IP6" "$NAT_B_WAN_IP6"
+fi
+if [[ $IPV6_A == 1 && $IPV6_B == 1 ]]; then
+  ns_exec "$NS_NAT_A" ip -6 route add 2001:db8:2::/64 via "$NAT_B_WAN_IP6"
+  ns_exec "$NS_NAT_B" ip -6 route add 2001:db8:1::/64 via "$NAT_A_WAN_IP6"
+fi
+if [[ $IPV6_A$IPV6_B != 00 ]]; then
+  ns_exec "$NS_OBS" ip -6 addr add "$OBS_IP6/64" dev obs0 nodad
+  # obs must be able to answer the LANs too (it has no default route).
+  [[ $IPV6_A == 1 ]] && ns_exec "$NS_OBS" ip -6 route add 2001:db8:1::/64 via "$NAT_A_WAN_IP6"
+  [[ $IPV6_B == 1 ]] && ns_exec "$NS_OBS" ip -6 route add 2001:db8:2::/64 via "$NAT_B_WAN_IP6"
+fi
 
-# apply_nat <ns> <type> <lan_if> <wan_if> <lan_host_ip>
+# The lab runs connection attempts several times a second, which no real host does. Linux allows
+# a host about 6 ICMP errors in a burst, then one per second, so with the default the agent's
+# probes for port mapping services (answered with ICMP port unreachable when absent) would start
+# timing out: an artifact of the measurement loop, not of the NAT. Lab routers do not rate-limit.
+for ns in "$NS_NAT_A" "$NS_NAT_B"; do ns_exec "$ns" sysctl -qw net.ipv4.icmp_ratelimit=0; done
+
+# start_usernat <ns> <lan_if> <wan_if> <public_ip>
+# The kernel keeps NATing everything except UDP (so ping still works); UDP is left entirely to
+# usernat, which reads it from packet sockets and sends the rewritten packets from a raw socket.
+start_usernat() {
+  local ns=$1 lan=$2 wan=$3 pub=$4
+  ns_exec "$ns" nft -f - <<NFT
+table ip raw {
+  # No conntrack for UDP: the kernel must neither NAT it nor remember it.
+  chain prerouting { type filter hook prerouting priority -300; meta l4proto udp notrack; }
+  chain output { type filter hook output priority -300; meta l4proto udp notrack; }
+}
+table ip nat {
+  chain postrouting { type nat hook postrouting priority 100; oifname "$wan" meta l4proto != udp masquerade; }
+}
+table ip filter {
+  # usernat already got its copy of these from its packet sockets; the kernel drops the originals.
+  # (Dropping inbound UDP in "input" also stops the kernel answering with ICMP port unreachable.)
+  chain input { type filter hook input priority 0; iifname "$wan" meta l4proto udp drop; }
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+    meta l4proto udp drop
+    ct state established,related accept
+    iifname "$lan" oifname "$wan" accept
+  }
+}
+# The tables above are IPv4 only (usernat handles IPv4 only). IPv6 is routed by the kernel and
+# filtered like on every lab router: replies to what the LAN sent, nothing unsolicited.
+table ip6 filter {
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+    ct state established,related accept
+    iifname "$lan" oifname "$wan" accept
+  }
+}
+NFT
+  # Started with ip netns exec directly so teardown.sh finds it via "ip netns pids" and stops it.
+  ip netns exec "$ns" "$USERNAT" --lan "$lan" --wan "$wan" --public-ip "$pub" \
+    --lifetime "${USERNAT_LIFETIME:-120}" --step "${USERNAT_STEP:-1}" \
+    >"/tmp/pierce-usernat-$ns.log" 2>&1 &
+  local pid=$!
+  sleep 0.2
+  kill -0 "$pid" 2>/dev/null || { echo "usernat failed in $ns:" >&2; cat "/tmp/pierce-usernat-$ns.log" >&2; return 1; }
+  echo "$ns: symmetric-sequential NAT on $wan (usernat pid $pid, log /tmp/pierce-usernat-$ns.log)"
+}
+
+# apply_nat <ns> <type> <lan_if> <wan_if> <lan_host_ip> <public_ip> <portmap 0|1>
 apply_nat() {
-  local ns=$1 type=$2 lan=$3 wan=$4 host=$5
+  local ns=$1 type=$2 lan=$3 wan=$4 host=$5 pub=$6 portmap=${7:-0}
   local snat="masquerade" dnat="" inbound=""
+  if [[ $type == symmetric-sequential ]]; then
+    start_usernat "$ns" "$lan" "$wan" "$pub"
+    return
+  fi
 
   # Linux masquerade keeps the source port when it is free, so one internal ip:port gets the same
   # public port for every destination (endpoint-independent mapping). "random" picks a fresh port
@@ -73,7 +178,7 @@ apply_nat() {
   # public port == internal port and no port rewrite is needed. (Valid for a one-host LAN, which is
   # exactly what the lab has.)
   if [[ $type == full || $type == restricted ]]; then
-    dnat="iifname \"$wan\" udp dport 1024-65535 dnat to $host;"
+    dnat="iifname \"$wan\" meta nfproto ipv4 udp dport 1024-65535 dnat ip to $host;"
   fi
 
   case "$type" in
@@ -87,20 +192,37 @@ apply_nat() {
       inbound="" ;;
   esac
 
+  # inet tables (not ip) so that miniupnpd, whose nftables backend only knows inet, can share them:
+  # every base chain first jumps into a chain of miniupnpd's, empty unless PORTMAP runs it. Port
+  # mappings it adds there come before the NAT type's own rules, as on a real router.
+  # inet also covers IPv6 (IPV6=...). It must not be NATed, so masquerade and dnat are limited to
+  # IPv4 with "meta nfproto ipv4" (without it, masquerade in an inet table translates IPv6 too:
+  # CI run 13 found symmetric-random NATing IPv6 into a symmetric NAT66). IPv6 gets only the
+  # forward chain's stateful filtering; the inbound rules (ip protocol ...) are IPv4 only.
   ns_exec "$ns" nft -f - <<NFT
-table ip nat {
-  chain prerouting { type nat hook prerouting priority -100; ${dnat} }
-  chain postrouting { type nat hook postrouting priority 100; oifname "$wan" ${snat}; }
+table inet nat {
+  chain prerouting_miniupnpd {}
+  chain postrouting_miniupnpd {}
+  chain prerouting { type nat hook prerouting priority -100; jump prerouting_miniupnpd; ${dnat} }
+  chain postrouting { type nat hook postrouting priority 100; jump postrouting_miniupnpd; oifname "$wan" meta nfproto ipv4 ${snat}; }
 }
-table ip filter {
+table inet filter {
   # Remembers (internal ip, internal port, remote ip) for every outbound UDP packet. Used by "restricted".
   set contacted {
     type ipv4_addr . inet_service . ipv4_addr
     flags dynamic, timeout
     timeout 120s
   }
+  chain miniupnpd {}
+  # Unsolicited UDP to the router's own WAN address (nothing listens there) must be dropped here.
+  # Otherwise the kernel delivers it locally, answers with ICMP port unreachable, and confirms a
+  # conntrack entry for (remote -> our public ip:port). If the LAN host then sends to that remote,
+  # masquerade sees the clash and picks a different public port: an early probe from the peer
+  # would silently turn this endpoint-independent NAT into an endpoint-dependent one.
+  chain input { type filter hook input priority 0; iifname "$wan" meta l4proto udp ct state new drop; }
   chain forward {
     type filter hook forward priority 0; policy drop;
+    jump miniupnpd
     iifname "$lan" oifname "$wan" ip protocol udp update @contacted { ip saddr . udp sport . ip daddr }
     ct state established,related accept
     iifname "$lan" oifname "$wan" accept
@@ -109,10 +231,44 @@ table ip filter {
 }
 NFT
   echo "$ns: $type NAT on $wan"
+  if [[ $portmap == 1 ]]; then start_miniupnpd "$ns" "$lan" "$wan" "$pub"; fi
 }
 
-apply_nat "$NS_NAT_A" "$TYPE_A" nA-lan nA-wan "$PEER_A_IP"
-apply_nat "$NS_NAT_B" "$TYPE_B" nB-lan nB-wan "$PEER_B_IP"
+# start_miniupnpd <ns> <lan_if> <wan_if> <public_ip>: the router also answers UPnP IGD, NAT-PMP and
+# PCP port mapping requests from its LAN (miniupnpd, as on many home routers).
+start_miniupnpd() {
+  local ns=$1 lan=$2 wan=$3 pub=$4 conf="/tmp/pierce-miniupnpd-$1.conf"
+  cat > "$conf" <<CONF
+ext_ifname=$wan
+listening_ip=$lan
+enable_upnp=yes
+enable_natpmp=yes
+# Only map ports to the host that asks, and only unprivileged ports.
+secure_mode=yes
+allow 1024-65535 0.0.0.0/0 1024-65535
+deny 0-65535 0.0.0.0/0 0-65535
+system_uptime=yes
+uuid=$(cat /proc/sys/kernel/random/uuid)
+upnp_table_name=filter
+upnp_nat_table_name=nat
+upnp_forward_chain=miniupnpd
+upnp_nat_chain=prerouting_miniupnpd
+upnp_nat_postrouting_chain=postrouting_miniupnpd
+CONF
+  # -d: stay in the foreground (teardown.sh stops it with the namespace); -P: own pid file.
+  ip netns exec "$ns" "$MINIUPNPD" -d -f "$conf" -P "/tmp/pierce-miniupnpd-$ns.pid" \
+    >"/tmp/pierce-miniupnpd-$ns.log" 2>&1 &
+  local pid=$!
+  for _ in $(seq 20); do
+    grep -q "Listening for NAT-PMP" "/tmp/pierce-miniupnpd-$ns.log" && break
+    sleep 0.1
+  done
+  kill -0 "$pid" 2>/dev/null || { echo "miniupnpd failed in $ns:" >&2; cat "/tmp/pierce-miniupnpd-$ns.log" >&2; return 1; }
+  echo "$ns: port mapping (UPnP IGD, NAT-PMP, PCP) by miniupnpd pid $pid, log /tmp/pierce-miniupnpd-$ns.log"
+}
+
+apply_nat "$NS_NAT_A" "$TYPE_A" nA-lan nA-wan "$PEER_A_IP" "$NAT_A_WAN_IP" "$PORTMAP_A"
+apply_nat "$NS_NAT_B" "$TYPE_B" nB-lan nB-wan "$PEER_B_IP" "$NAT_B_WAN_IP" "$PORTMAP_B"
 
 trap - ERR
 echo "lab up: natA=$TYPE_A natB=$TYPE_B"

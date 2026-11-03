@@ -1,0 +1,125 @@
+// Signaling between agents and the coordination server.
+//
+// One bidirectional stream per agent, open while a connection is being set up:
+//   agent -> Register
+//   coord -> RelayList (possibly empty)
+//   agent -> RelayRtts, then Candidates; answers every Ping with a Pong
+//   coord -> Ping (RTT measurement), then once both peers are there:
+//            Candidates (the peer's), SessionKey, RelayGrant (if relays are configured), PunchIn
+//   agent -> RetryDirect while relayed (every 30 s); when both peers ask, the server runs the
+//            pairing again (fresh RTTs, PunchIn) so they can try to upgrade to a direct path.
+// The server is only needed to set a connection up. Once the peers are connected they keep
+// working without it.
+syntax = "proto3";
+
+package pierce.coord;
+
+service Coord {
+  rpc Session(stream AgentMsg) returns (stream CoordMsg);
+}
+
+message Register {
+  string node_id = 1;  // who I am
+  string peer_id = 2;  // who I want to reach
+}
+
+message Candidate {
+  enum Type {
+    HOST = 0;
+    SRFLX = 1;
+    PORTMAPPED = 2;  // opened on request by the peer's router (UPnP / NAT-PMP / PCP)
+  }
+  Type type = 1;
+  bytes ip = 2;  // 4 bytes (IPv4) or 16 (IPv6), network order
+  uint32 port = 3;
+  uint32 priority = 4;
+}
+
+// How the sender's NAT maps ports, measured from its main socket with three STUN requests to
+// different destinations. Lets the peer predict ports behind a sequential symmetric NAT.
+message NatInfo {
+  enum Mapping {
+    UNKNOWN = 0;
+    ENDPOINT_INDEPENDENT = 1;  // same public port for every destination (cone NATs)
+    SYMMETRIC_RANDOM = 2;
+    SYMMETRIC_SEQUENTIAL = 3;  // each new destination gets last_port + step
+  }
+  Mapping mapping = 1;
+  uint32 last_port = 2;  // public port of the last STUN request
+  int32 step = 3;
+}
+
+message Candidates {
+  repeated Candidate candidates = 1;
+  NatInfo nat = 2;
+}
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}
+
+// Key for the probes' HMAC. Fresh for every pairing; both peers get the same one.
+message SessionKey {
+  bytes key = 1;
+}
+
+// "Start probing in delay_ms milliseconds." Relative, so the peers need no clock sync; the
+// server picks each peer's delay so that both punches start at the same moment.
+message PunchIn {
+  uint32 delay_ms = 1;
+}
+
+message Relay {
+  bytes ip = 1;  // 4 bytes (IPv4) or 16 (IPv6), network order
+  uint32 port = 2;
+  uint32 tls_port = 3;  // TCP/TLS fallback on the same IP; 0 = none
+}
+
+message RelayList {
+  repeated Relay relays = 1;
+}
+
+// The agent's RTT to each relay in RelayList, by index. Relays that did not answer are left out.
+message RelayRtts {
+  message Rtt {
+    uint32 index = 1;
+    uint32 rtt_us = 2;
+  }
+  repeated Rtt rtts = 1;
+}
+
+// The relay both peers use if the direct attempt fails (the one with the lowest RTT_A + RTT_B),
+// and a token it accepts (see relay/protocol.hpp). Both peers get the same token.
+message RelayGrant {
+  Relay relay = 1;
+  bytes token = 2;
+}
+
+// "We are on the relay; let us try the direct path again." The agent sends fresh Candidates
+// first, since its NAT mappings may have changed.
+message RetryDirect {}
+
+message AgentMsg {
+  oneof msg {
+    Register register = 1;
+    Candidates candidates = 2;
+    Pong pong = 3;
+    RelayRtts relay_rtts = 4;
+    RetryDirect retry_direct = 5;
+  }
+}
+
+message CoordMsg {
+  oneof msg {
+    Ping ping = 1;
+    Candidates peer_candidates = 2;
+    SessionKey session_key = 3;
+    PunchIn punch_in = 4;
+    RelayList relay_list = 5;
+    RelayGrant relay_grant = 6;
+  }
+}

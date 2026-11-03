@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test-lab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libgtest-dev libssl-dev libsqlite3-dev \
+            libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc \
+            iproute2 iputils-ping nftables python3 \
+            libnatpmp-dev libminiupnpc-dev
+
+      - name: Build
+        run: |
+          cmake -B build
+          cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      # Network namespaces + nftables need root; the runner VM allows sudo. Nothing outside the
+      # pierce-* namespaces is touched, and every script tears its lab down.
+      - name: Lab regression run (reduced matrix)
+        run: sudo --preserve-env=GITHUB_STEP_SUMMARY ./lab/ci.sh "$RUNNER_TEMP/lab"
+
+      - name: Upload lab CSVs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-results
+          path: ${{ runner.temp }}/lab/*.csv

@@ -4,3 +4,5 @@ compile_commands.json
 *.pcap
 CLAUDE.md
 docs/
+__pycache__/
+build-dev/

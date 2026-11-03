@@ -4,21 +4,259 @@ A WireGuard-based mesh VPN agent. The goal is to raise the **direct connection s
 
 > Why not just use Tailscale? Tailscale works well, but its NAT traversal is a black box to its users: I wanted to see *why* a connection ends up on a relay and measure how much each technique (hole punching, port prediction, birthday probing) actually helps, so I built the traversal engine myself and test it in a reproducible NAT lab.
 
+## Summary
+
+Measured in the NAT lab on OCI (five NAT types, every 5×5 combination, 100 attempts each); the tables below have the confidence intervals.
+
+- **Direct connections, all 25 combinations: 68% → 85%** (1700 → 2124 of 2500 attempts) from plain hole punching (stage 2) to the stage 3 techniques.
+- **Port prediction** turns every pair with a `symmetric-sequential` NAT and a port-restricted or sequential peer from 0% to 100% direct, including sequential × sequential.
+- **Birthday probing** (256 sockets × 256 guessed ports) gets `symmetric-random` × `port-restricted` from 0% to 61–63%, matching the expected 1 − e^(−256·256/64512) ≈ 64%.
+- **Nothing is left unconnected**: every attempt that fails direct is on a relay after 3 s (376 of 2500), and those that can go direct later upgrade from the relay (100% of them, median ≈ 5 s).
+- **Port mapping** (PCP, NAT-PMP, UPnP) and **IPv6** each make every combination direct in the lab (2300/2300 and 25/25 combinations).
+- **Data plane**: WireGuard (BoringTun) through the punched path, 420–680 Mbit/s iperf3 direct or over the UDP relay in the lab, and about 350 Mbit/s over the TCP/TLS relay fallback for networks that block UDP.
+- **Real network**: the home network (a double NAT) keeps an idle UDP mapping for 20–30 s, so the default keepalive is 10 s. Connection runs on real networks are not measured yet.
+
 ## Results
 
-Direct connection success rate per NAT combination, ≥100 attempts each, with Wilson 95% confidence intervals, plus time to connect. Generated from `results/*.csv` by `lab/report.py` — do not edit the table by hand.
+All tables are generated from the per-attempt CSVs in `results/` by `lab/report.py`; do not edit them by hand. Success rates come with Wilson 95% confidence intervals.
 
-<!-- report:start -->
+### Stage 1: NAT type detection
+
+Can the C++ detector (`nat_detect`) tell the five lab NAT types apart? One attempt = both peers run the detector at the same time; success = both sides classified as configured. NAT A is the row, NAT B the column.
+
+<!-- report:stage1:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
 | NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
 |---|---|---|---|---|---|
-| full | — | — | — | — | — |
-| restricted | — | — | — | — | — |
-| port-restricted | — | — | — | — | — |
-| symmetric-random | — | — | — | — | — |
-| symmetric-sequential | — | — | — | — | — |
-<!-- report:end -->
+| full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-sequential | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
 
-Baseline (stage 2) → improved (stage 3). Raw per-attempt data in `results/`.
+Detection time, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 0 / 0 | 198 / 198 | 397 / 397 | 0 / 0 | 0 / 0 |
+| restricted | 198 / 198 | 198 / 198 | 397 / 397 | 198 / 198 | 198 / 198 |
+| port-restricted | 397 / 397 | 397 / 397 | 397 / 397 | 397 / 397 | 397 / 397 |
+| symmetric-random | 0 / 0 | 198 / 198 | 397 / 397 | 0 / 0 | 0 / 0 |
+| symmetric-sequential | 0 / 0 | 198 / 198 | 397 / 397 | 0 / 0 | 0 / 0 |
+<!-- report:stage1:end -->
+
+### Stage 2: direct connection baseline
+
+Plain hole punching: host and server-reflexive candidates, RTT-compensated simultaneous probes, peer-reflexive candidates learned from incoming probes, 3 s cap, no relay. One attempt = both agents start at the same time; success = both received an authenticated probe response. Time to connect runs from the start of signaling to that first response (slower side). Stage 3 (port prediction, birthday probing) is measured against this table.
+
+<!-- report:stage2:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 0% [0–4] | 0% [0–4] |
+| symmetric-random | 100% [96–100] | 100% [96–100] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-sequential | 100% [96–100] | 100% [96–100] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 42 / 43 | 43 / 83 | 43 / 83 | 43 / 43 | 43 / 43 |
+| restricted | 43 / 83 | 43 / 83 | 43 / 83 | 43 / 83 | 43 / 83 |
+| port-restricted | 43 / 83 | 82 / 83 | 82 / 83 | — | — |
+| symmetric-random | 43 / 43 | 43 / 83 | — | — | — |
+| symmetric-sequential | 43 / 43 | 43 / 83 | — | — | — |
+<!-- report:stage2:end -->
+
+#### Asymmetric delay
+
+Extra one-way delay on NAT A's internet link only (`tc netem`), to check that the RTT-compensated punch time keeps working when one peer is far away.
+
+<!-- report:delay:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A × NAT B | delay_ms = 0 | delay_ms = 50 | delay_ms = 100 | delay_ms = 200 |
+|---|---|---|---|---|
+| full × full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted × port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random × restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A × NAT B | delay_ms = 0 | delay_ms = 50 | delay_ms = 100 | delay_ms = 200 |
+|---|---|---|---|---|
+| full × full | 43 / 43 | 468 / 468 | 893 / 893 | 1743 / 1743 |
+| port-restricted × port-restricted | 82 / 83 | 468 / 468 | 893 / 893 | 1743 / 1744 |
+| symmetric-random × restricted | 43 / 83 | 493 / 493 | 943 / 943 | 1843 / 1844 |
+<!-- report:delay:end -->
+
+#### Coordination server outage
+
+`sudo ./lab/check_coord_outage.sh` connects two peers, kills the coordination and STUN servers, then requires 10 s of keepalives (every 500 ms) to keep getting answered on both sides.
+
+### Stage 3: port prediction, birthday probing, relay
+
+Same 5×5 matrix with the stage 3 techniques on. Success is still the **direct** rate; attempts that fail it fall back to a relay after 3 s (relay usage table below).
+
+- **NAT characterization**: three STUN requests from the agent's one socket (primary, other IP, other port) tell endpoint-independent, sequential symmetric (+ step) and random symmetric mappings apart.
+- **Port prediction** (peer behind `symmetric-sequential`): probe the next ports the peer's NAT will hand out. When both sides are sequential, each side's k-th prediction is offset so it leaves from exactly the mapping the other side's k-th prediction targets.
+- **Birthday probing** (`symmetric-random` vs a cone NAT): the random side probes from 256 extra sockets, the cone side guesses 256 ports on the peer's IP; expected hit rate 1 − e^(−256·256/64512) ≈ 64%.
+- **Relay**: after 3 s the agents bind to the relay the coordination server picked (lowest RTT_A + RTT_B) with a shared token and probe through it.
+- **Triggered checks** on every incoming request (also a change to the stage 2 code path).
+- **Port mapping** (separate table below): PCP (own implementation), NAT-PMP (libnatpmp), UPnP IGD (miniupnpc).
+- **IPv6 candidates** (separate table below): dual-stack socket, IPv6 host candidates.
+
+<!-- report:stage3:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted | 100% [96–100] | 100% [96–100] | 100% [96–100] | 61% [51–70] | 100% [96–100] |
+| symmetric-random | 100% [96–100] | 100% [96–100] | 63% [53–72] | 0% [0–4] | 0% [0–4] |
+| symmetric-sequential | 100% [96–100] | 100% [96–100] | 100% [96–100] | 0% [0–4] | 100% [96–100] |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 44 / 45 | 44 / 44 | 44 / 45 | 25 / 26 | 44 / 45 |
+| restricted | 44 / 45 | 44 / 45 | 44 / 44 | 26 / 28 | 44 / 45 |
+| port-restricted | 44 / 45 | 44 / 45 | 44 / 45 | 220 / 304 | 67 / 67 |
+| symmetric-random | 26 / 34 | 27 / 35 | 220 / 314 | — | — |
+| symmetric-sequential | 44 / 45 | 44 / 45 | 67 / 68 | — | 53 / 54 |
+
+Relay usage: attempts that fell back to the relay [Wilson 95% CI].
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| restricted | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| port-restricted | 0% [0–4] | 0% [0–4] | 0% [0–4] | 39% [30–49] | 0% [0–4] |
+| symmetric-random | 0% [0–4] | 0% [0–4] | 37% [28–47] | 100% [96–100] | 100% [96–100] |
+| symmetric-sequential | 0% [0–4] | 0% [0–4] | 0% [0–4] | 100% [96–100] | 0% [0–4] |
+<!-- report:stage3:end -->
+
+#### Port mapping (UPnP / NAT-PMP / PCP)
+
+The same matrix with NAT A's router also answering port mapping requests (miniupnpd, the daemon many home routers run). The agent asks it to open its socket's port, trying PCP, NAT-PMP and UPnP in that order, and offers the mapped port as a candidate. A mapped port takes packets from anyone, so even a symmetric NAT on side A stops mattering. Rows `<type>+portmap` use whichever protocol answers first (PCP); the last three rows use one protocol each. `symmetric-sequential` has no row: the userspace NAT does not do port mapping.
+
+<!-- report:portmap:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+portmap | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+pcp | — | — | — | 100% [96–100] | — |
+| symmetric-random+natpmp | — | — | — | 100% [96–100] | — |
+| symmetric-random+upnp | — | — | — | 100% [96–100] | — |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+portmap | 44 / 45 | 44 / 45 | 44 / 45 | 25 / 26 | 45 / 46 |
+| restricted+portmap | 44 / 45 | 44 / 45 | 44 / 45 | 25 / 26 | 45 / 45 |
+| port-restricted+portmap | 44 / 45 | 44 / 45 | 44 / 45 | 25 / 26 | 45 / 45 |
+| symmetric-random+portmap | 27 / 34 | 27 / 35 | 27 / 32 | 44 / 45 | 45 / 45 |
+| symmetric-random+pcp | — | — | — | 44 / 45 | — |
+| symmetric-random+natpmp | — | — | — | 45 / 46 | — |
+| symmetric-random+upnp | — | — | — | 92 / 93 | — |
+<!-- report:portmap:end -->
+
+When no router answers, the probes fail at once with ICMP port unreachable; a router that silently drops them costs up to 500 ms before signaling goes on without a mapping.
+
+#### IPv6
+
+The agent's one socket is dual-stack, and IPv6 interface addresses become host candidates (preferred over IPv4). With IPv6 there is usually no NAT, only the router's stateful firewall, and simultaneous probes open that like a port-restricted cone, so the symmetric IPv4 NATs stop mattering once both sides have IPv6. The lab's `IPV6=AB` gives both sides IPv6 behind such a firewall; `symmetric-random+ipv6-A-only` has it on one side only and must fall back to IPv4.
+
+<!-- report:ipv6:start -->
+Success rate [Wilson 95% CI], n = 100 attempts per cell.
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| restricted+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| port-restricted+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-sequential+ipv6 | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] | 100% [96–100] |
+| symmetric-random+ipv6-A-only | — | — | — | 0% [0–4] | — |
+
+Time to connect, median / p95 in ms (successful attempts only).
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+ipv6 | 24 / 26 | 24 / 25 | 24 / 26 | 25 / 26 | 24 / 25 |
+| restricted+ipv6 | 24 / 63 | 24 / 25 | 24 / 64 | 25 / 26 | 24 / 25 |
+| port-restricted+ipv6 | 24 / 63 | 24 / 24 | 24 / 26 | 25 / 26 | 24 / 25 |
+| symmetric-random+ipv6 | 26 / 32 | 26 / 35 | 26 / 31 | 24 / 24 | 24 / 25 |
+| symmetric-sequential+ipv6 | 24 / 25 | 24 / 26 | 24 / 26 | 24 / 25 | 24 / 26 |
+| symmetric-random+ipv6-A-only | — | — | — | — | — |
+
+Relay usage: attempts that fell back to the relay [Wilson 95% CI].
+
+| NAT A \ NAT B | full | restricted | port-restricted | symmetric-random | symmetric-sequential |
+|---|---|---|---|---|---|
+| full+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| restricted+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| port-restricted+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-random+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-sequential+ipv6 | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] | 0% [0–4] |
+| symmetric-random+ipv6-A-only | — | — | — | 100% [96–100] | — |
+<!-- report:ipv6:end -->
+
+Implemented and tested in the lab only: the author's home connection has no IPv6.
+
+#### Relay → direct upgrade
+
+A connection that started on the relay retries the direct path in the background. In production the retry interval is 30 s; this experiment uses 5 s so it fits in an hour. Only random symmetric vs port-restricted can upgrade at all in the lab (each retry is a fresh 64% birthday draw); the other relayed pairs never get a direct path.
+
+<!-- report:upgrade:start -->
+| NAT A × NAT B | started on relay | upgraded to direct | upgrade time, median / p95 ms |
+|---|---|---|---|
+| port-restricted × symmetric-random | 36 | 100% [90–100] | 5196 / 10098 |
+| symmetric-random × port-restricted | 39 | 100% [91–100] | 5155 / 10207 |
+<!-- report:upgrade:end -->
+
+### Stage 4: traffic through the tunnel (lab)
+
+Real IP traffic between TUN devices (peerA 10.99.0.1, peerB 10.99.0.2) through WireGuard (BoringTun) over the path the agents found, measured from peerA: 50 pings and a 5 s iperf3 TCP transfer per run. The lab's links have no delay, so ping shows the cost of the tunnel itself. The `symmetric-sequential` pair is limited by the userspace NAT, which copies every packet through user space; that is not WireGuard's limit.
+
+The `+udp-blocked` rows drop all of peerA's UDP at its NAT, like a network that only lets TCP out: no STUN, no direct path, no UDP relay, so both agents meet on the relay over TCP/TLS (`relay-tls`).
+
+On every relayed run, tcpdump checks the relay hop: the pings carry a marker that is visible on peerA's TUN device and never in the packets to or from the relay. The last relayed capture is kept as `results/stage4_relay_hop.pcap` (not committed: `*.pcap` is git-ignored).
+
+<!-- report:stage4:start -->
+| NAT A × NAT B | path | runs | ping, median ms | loss, worst | iperf3, median / min Mbit/s |
+|---|---|---|---|---|---|
+| port-restricted × port-restricted | direct | 5 | 0.25 | 0% | 662 / 638 |
+| symmetric-random × port-restricted | direct | 5 | 0.25 | 0% | 677 / 654 |
+| symmetric-random × symmetric-random | relay | 5 | 0.37 | 0% | 658 / 635 |
+| symmetric-sequential × symmetric-sequential | direct | 5 | 0.39 | 0% | 423 / 413 |
+| port-restricted+udp-blocked × port-restricted | relay-tls | 5 | 0.53 | 0% | 346 / 342 |
+<!-- report:stage4:end -->
+
+#### NAT mapping lifetime (real routers)
+
+How long a real home network or phone hotspot keeps an idle UDP mapping, measured with `tools/maplife.py` (server on OCI, client on any PC behind the NAT, Python standard library only). The design sets the keepalive to half of it.
+
+<!-- report:maplife:start -->
+| network | runs | idle mapping lifetime per run | keepalive (half the lower bound) |
+|---|---|---|---|
+| home | 3 | 20–30 s, 20–30 s, 20–30 s | 10 s |
+<!-- report:maplife:end -->
+
+The home network is a double NAT: the home router's WAN address is private (10.4.10.x) behind an upstream NAT, so the lifetime is that of whichever of the two drops the mapping first. It dropped an idle mapping after 20–30 s in all three runs, which brackets the 25 s keepalive the design started with, so the agent's default keepalive is half the lower bound, 10 s (`--keepalive-ms`). The phone hotspot is not measured: none was available.
+
+Real networks (home ↔ OCI, hotspot ↔ OCI, home ↔ hotspot) are not measured yet: they need a Linux machine behind the home router or hotspot.
 
 ## Build
 
@@ -28,7 +266,16 @@ cmake --build build
 ctest --test-dir build
 ```
 
-On Ubuntu you can skip vcpkg for now: `sudo apt install cmake g++ libgtest-dev`, then `cmake -B build` without the toolchain file.
+On Ubuntu 24.04 you can skip vcpkg and use the distro packages, then `cmake -B build` without the toolchain file:
+
+```sh
+sudo apt install cmake g++ libgtest-dev libssl-dev libsqlite3-dev \
+  libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc iproute2 iperf3 tcpdump \
+  libnatpmp-dev libminiupnpc-dev
+curl --proto '=https' -sSf https://sh.rustup.rs | sh   # Rust, to build BoringTun (stage 4)
+```
+
+Without Rust everything builds except the WireGuard data plane (CMake prints a warning). CI (`.github/workflows/ci.yml`) builds, runs the unit tests and a reduced lab matrix on every push.
 
 ## NAT lab (Linux, root)
 
@@ -37,9 +284,95 @@ sudo ./lab/setup.sh full symmetric-random   # NAT A, NAT B: full | restricted | 
 sudo ./lab/check_ping.sh
 sudo ./lab/check_nat.sh full symmetric-random
 sudo ./lab/teardown.sh
-sudo ./lab/run_matrix.sh                    # all 5×5 combinations
+sudo ./lab/run_matrix.sh                    # all 5×5 combinations -> results/*.csv
+python3 lab/report.py results/stage1_nat_detect.csv --section stage1 --readme README.md \
+  --time-col detect_ms --time-label "Detection time"
+
+sudo ./lab/run_stage2.sh baseline           # stage 2, all 5×5 combinations -> results/stage2_baseline.csv (~1 h)
+sudo ./lab/run_stage2.sh delay              # one-sided extra delay -> results/stage2_delay.csv (needs tc netem)
+sudo ./lab/check_coord_outage.sh            # peers keep working after the coordination server dies
+python3 lab/report.py results/stage2_baseline.csv --section stage2 --readme README.md
+python3 lab/report.py results/stage2_delay.csv --section delay --by delay_ms --readme README.md
+
+sudo ./lab/run_stage2.sh stage3             # stage 3 techniques + relay -> results/stage3_improved.csv
+sudo ./lab/run_stage2.sh upgrade            # relay -> direct upgrades -> results/stage3_upgrade.csv
+./lab/get_miniupnpd.sh                      # once: unpack miniupnpd for the lab (not installed)
+sudo ./lab/run_stage2.sh portmap            # router A does port mapping -> results/stage3_portmap.csv
+sudo ./lab/run_stage2.sh ipv6               # both sides dual-stack -> results/stage3_ipv6.csv (needs IPv6 in the kernel)
+sudo ./lab/check_coord_outage.sh symmetric-random symmetric-random   # relayed path survives too
+python3 lab/report.py results/stage3_improved.csv --section stage3 --readme README.md
+python3 lab/report.py results/stage3_upgrade.csv --upgrade --section upgrade --readme README.md
+python3 lab/report.py results/stage3_portmap.csv --section portmap --readme README.md
+python3 lab/report.py results/stage3_ipv6.csv --section ipv6 --readme README.md
+
+sudo ./lab/run_stage4.sh                    # traffic through the tunnel -> results/stage4_lab.csv
+python3 lab/report.py results/stage4_lab.csv --stage4 --section stage4 --readme README.md
+
+sudo ./lab/ci.sh                            # the CI regression run: 10 attempts per combination
 ```
+
+## STUN and NAT type detection
+
+```sh
+build/stun_server --ip 192.0.32.10 --alt-ip 192.0.32.11            # ports 3478 and 3479 on both IPs
+build/nat_detect --server 192.0.32.10:3478 --alt-ip 192.0.32.11    # prints "<type>,<ms>"
+```
+
+The detector first sends Binding requests from one socket to three addresses of the server (primary, other IP, other port). Different public ports mean a symmetric NAT: the same small step each time (e.g. +1, +1) is `symmetric-sequential`, anything else `symmetric-random`. Same port means a cone NAT, and two more tests on fresh sockets ask the server (CHANGE-REQUEST, RFC 5780) to answer from its other IP, then from its other port: the first getting through means `full`, the second `restricted`, neither `port-restricted`.
+
+The filtering tests need one server with two IPs, which the lab has. Two separate STUN servers (the real deployment) are enough to tell cone from symmetric, but not the cone types apart.
+
+## Hole punching (stage 2)
+
+```sh
+build/pierce-coord --listen 192.0.32.10:50051
+build/pierce-agent --coord 192.0.32.10:50051 --stun 192.0.32.10:3478 --id A --peer B
+# prints: success,time_to_connect_ms,probes_sent,path,remote   e.g. 1,44,3,direct,192.0.32.2:42790
+```
+
+1. The agent opens **one** UDP socket and uses it for everything: STUN, probes, and later WireGuard. NAT mappings belong to a socket, so the public address STUN reports is only useful if the probes leave from the same socket.
+2. Candidates: every local IPv4 address (host) plus the STUN-reported public address (server-reflexive), with RFC 8445 priorities.
+3. Signaling (`proto/coord.proto`, one bidirectional gRPC stream per agent): Register, Candidates. Once both peers are there, the server pings each over its stream, then sends the peer's candidates, a fresh 32-byte session key and `PunchIn{delay_ms}` with `delay_i = X − RTT_i/2`, `X = max(RTT_A, RTT_B)/2 + 20 ms`, so both peers start at the same moment without synchronized clocks.
+4. Probing: one request every 20 ms, round robin over the peer's candidates. Every probe carries an 8-byte HMAC-SHA256 with the session key; anything else is dropped, and probes only ever go to IPs from signaling. A valid request from an unknown port of a known IP becomes a peer-reflexive candidate and is probed right away. That is how a peer behind a symmetric NAT gets reached.
+5. Success: an authenticated response to one of our requests. Give up after 3 s and fall back to the relay (stage 3).
+
+## Relay (stage 3)
+
+```sh
+build/pierce-relay --listen 192.0.32.10:3480 --secret <hex>
+build/pierce-coord --listen 192.0.32.10:50051 --relay 192.0.32.10:3480 --relay 192.0.32.11:3480 --relay-secret <hex>
+```
+
+The relay forwards packets between the two endpoints that bound with the same token. With `--tls-listen`/`--tls-cert`/`--tls-key` (and `--relay-tls-port` on the coordination server) it also accepts agents over TCP/TLS, for networks that block UDP: the same protocol, one datagram per length-prefixed frame. The agent falls back to it when the UDP relay does not answer. A token is `session id | expiry | HMAC(secret)`, issued by the coordination server and checked by the relay alone, so a relayed connection keeps working while the coordination server is down until the token expires (600 s by default). Relay control packets start with `0xFE` (BIND, BOUND, PING, PONG); everything else is forwarded unchanged, so the relay only ever sees WireGuard ciphertext and probes.
+
+## Data plane (stage 4)
+
+```sh
+build/pierce-wgkey genkey > a.key; build/pierce-wgkey pubkey < a.key > a.pub   # likewise for B
+sudo ip tuntap add dev pierce0 mode tun; sudo ip addr add 10.99.0.1/24 dev pierce0
+sudo ip link set pierce0 mtu 1420 up
+sudo build/pierce-agent --coord ... --stun ... --id A --peer B \
+  --tun pierce0 --wg-key "$(cat a.key)" --wg-peer "$(cat b.pub)" --hold 0
+```
+
+After connecting, the agent moves packets between the TUN device and BoringTun, and BoringTun's datagrams go out on the socket and path the connection was made on: the main socket, a birthday socket, or the main socket via the relay. On that socket the first byte tells WireGuard (1–4) and probes (0xFF) apart. Peer public keys are exchanged in advance (here as files), never through the coordination server, so a compromised coordinator cannot slip in a fake peer: the WireGuard handshake would fail.
+
+## Measuring a NAT's mapping lifetime
+
+```sh
+# on OCI (a public host): let UDP 3490 in, then start the server
+#   OCI console: VCN -> Security List -> Ingress rule: UDP, destination port 3490
+sudo iptables -I INPUT -p udp --dport 3490 -j ACCEPT        # Ubuntu images on OCI also filter
+python3 tools/maplife.py server --port 3490
+
+# on a PC behind the router (Windows works: python, not python3)
+python tools/maplife.py client --server <OCI public IP>:3490 --network home --runs 3
+python tools/maplife.py client --server <OCI public IP>:3490 --network hotspot --runs 3
+python3 lab/report.py results/stage4_mapping_lifetime.csv --maplife --section maplife --readme README.md
+```
+
+Each run opens one socket per idle time (10 s to 15 min) and asks the server to answer after that long; the answers that still arrive show how long the router kept the mapping. A run takes about 15 minutes; keep the PC from sleeping and do not use the network heavily meanwhile (a router under pressure may drop mappings early).
 
 ## Documentation
 
-- `lab/README.md` — NAT lab topology and how each NAT type is built
+- `lab/README.md` — NAT lab topology, how each NAT type is built, the userspace NAT
